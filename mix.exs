@@ -24,6 +24,7 @@ defmodule E2bEx.MixProject do
   defp deps do
     [
       {:req, "~> 0.5"},
+      {:plug, "~> 1.16", only: :test},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}
     ]
   end

@@ -43,7 +43,7 @@ defmodule E2bEx.Client do
   @doc false
   @spec base_req(t()) :: Req.Request.t()
   def base_req(%__MODULE__{} = client) do
-    Req.new(base_url: client.base_url)
+    Req.new(base_url: client.base_url, retry: false)
     |> Req.Request.put_header("x-api-key", client.api_key)
     |> Req.merge(client.req_options)
   end
