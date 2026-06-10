@@ -1,11 +1,11 @@
 # E2bEx
 
-**TODO: Add description**
+An Elixir client for the [E2B](https://e2b.dev) API, covering Sandboxes,
+Templates, and Tags. Built on [`Req`](https://hex.pm/packages/req).
 
 ## Installation
 
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
-by adding `e2b_ex` to your list of dependencies in `mix.exs`:
+Add `e2b_ex` to your deps in `mix.exs`:
 
 ```elixir
 def deps do
@@ -15,7 +15,18 @@ def deps do
 end
 ```
 
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at <https://hexdocs.pm/e2b_ex>.
+## Usage
 
+```elixir
+client = E2bEx.client(api_key: "e2b_...")
+
+{:ok, sandbox} = E2bEx.Sandboxes.create(client, %{templateID: "base"})
+{:ok, sandboxes} = E2bEx.Sandboxes.list(client)
+:ok = E2bEx.Sandboxes.kill(client, sandbox.sandbox_id)
+```
+
+Configuration can also come from application config:
+
+```elixir
+config :e2b_ex, api_key: "e2b_..."
+```

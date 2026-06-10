@@ -8,7 +8,12 @@ defmodule E2bEx.MixProject do
       elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      name: "E2bEx",
+      docs: [
+        main: "E2bEx",
+        extras: ["README.md"]
+      ]
     ]
   end
 
