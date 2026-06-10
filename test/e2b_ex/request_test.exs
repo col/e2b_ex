@@ -49,4 +49,34 @@ defmodule E2bEx.RequestTest do
     Req.Test.stub(__MODULE__, fn conn -> Req.Test.transport_error(conn, :timeout) end)
     assert {:error, %Error{reason: :timeout}} = Request.request(client(), :get, "/sandboxes")
   end
+
+  describe "build_options/3 (Content-Length for bodyless writes)" do
+    # E2B runs behind a GCP frontend that rejects bodyless POSTs with
+    # `411 Length Required`. Finch only emits a Content-Length header when the
+    # request body is a binary (not nil), so write requests with no JSON body
+    # must carry an empty-string body to force `Content-Length: 0`.
+    # (Req.Test bypasses Finch's transport layer, so this is verified at the
+    # options-construction layer rather than via a stubbed request.)
+
+    test "POST without a json body gets an empty-string body" do
+      opts = Request.build_options(:post, "/sandboxes/sb_1/pause", [])
+      assert Keyword.get(opts, :body) == ""
+    end
+
+    test "PUT and PATCH without a json body get an empty-string body" do
+      assert Request.build_options(:put, "/x", []) |> Keyword.get(:body) == ""
+      assert Request.build_options(:patch, "/x", []) |> Keyword.get(:body) == ""
+    end
+
+    test "a write request with a json body does not also set :body" do
+      opts = Request.build_options(:post, "/sandboxes", json: %{templateID: "t"})
+      assert Keyword.get(opts, :body) == nil
+      assert Keyword.get(opts, :json) == %{templateID: "t"}
+    end
+
+    test "GET and DELETE without a body do not set :body" do
+      assert Request.build_options(:get, "/sandboxes", []) |> Keyword.get(:body) == nil
+      assert Request.build_options(:delete, "/sandboxes/sb_1", []) |> Keyword.get(:body) == nil
+    end
+  end
 end
