@@ -43,7 +43,7 @@ defmodule E2bEx.Sandboxes do
   @doc """
   Get metrics for a sandbox (`GET /sandboxes/:id/metrics`).
 
-  ## Options (query): `:start`, `:end` (Unix ms timestamps).
+  ## Options (query): `:start`, `:end` (Unix timestamps, in seconds).
   """
   @spec metrics(E2bEx.Client.t(), String.t(), keyword()) ::
           {:ok, [SandboxMetric.t()]} | {:error, E2bEx.Error.t()}
