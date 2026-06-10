@@ -26,6 +26,9 @@ defmodule E2bEx.Client do
       `:plug` for testing, or `:retry`/`:receive_timeout`).
 
   Falls back to `Application.get_env(:e2b_ex, key)` for any option not given.
+
+  Req's automatic retries are disabled by default; pass
+  `req_options: [retry: :safe_transient]` to re-enable them.
   """
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
