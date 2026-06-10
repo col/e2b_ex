@@ -89,6 +89,64 @@ defmodule E2bEx.Templates do
     end
   end
 
+  @doc """
+  Start a build for a template (`POST /v2/templates/:id/builds/:build_id`).
+
+  `params` matches the OpenAPI `TemplateBuildStartV2` schema, e.g.
+  `%{fromImage: "ubuntu:22.04", steps: [...]}`. Returns `:ok` on 202.
+  """
+  @spec trigger_build(E2bEx.Client.t(), String.t(), String.t(), map()) ::
+          :ok | {:error, E2bEx.Error.t()}
+  def trigger_build(client, template_id, build_id, params \\ %{}) when is_map(params) do
+    case Request.request(client, :post, "/v2/templates/#{template_id}/builds/#{build_id}", json: params) do
+      {:ok, _} -> :ok
+      {:error, error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Get build status and logs (`GET /templates/:id/builds/:build_id/status`).
+
+  ## Options (query): `:logs_offset`, `:logs_limit`, `:level`.
+
+  Returns the raw `TemplateBuildInfo` map (`status`, `logs`, `logEntries`, `reason`).
+  """
+  @spec build_status(E2bEx.Client.t(), String.t(), String.t(), keyword()) ::
+          {:ok, map()} | {:error, E2bEx.Error.t()}
+  def build_status(client, template_id, build_id, opts \\ []) do
+    params =
+      []
+      |> put_param(:logsOffset, opts[:logs_offset])
+      |> put_param(:limit, opts[:logs_limit])
+      |> put_param(:level, opts[:level])
+
+    Request.request(client, :get, "/templates/#{template_id}/builds/#{build_id}/status", params: params)
+  end
+
+  @doc """
+  Get structured build logs (`GET /templates/:id/builds/:build_id/logs`).
+
+  ## Options (query): `:cursor`, `:limit`, `:direction`, `:level`, `:source`.
+
+  Returns the raw list of `BuildLogEntry` maps.
+  """
+  @spec build_logs(E2bEx.Client.t(), String.t(), String.t(), keyword()) ::
+          {:ok, [map()]} | {:error, E2bEx.Error.t()}
+  def build_logs(client, template_id, build_id, opts \\ []) do
+    params =
+      []
+      |> put_param(:cursor, opts[:cursor])
+      |> put_param(:limit, opts[:limit])
+      |> put_param(:direction, opts[:direction])
+      |> put_param(:level, opts[:level])
+      |> put_param(:source, opts[:source])
+
+    with {:ok, %{"logs" => logs}} <-
+           Request.request(client, :get, "/templates/#{template_id}/builds/#{build_id}/logs", params: params) do
+      {:ok, logs}
+    end
+  end
+
   @doc false
   def put_param(params, _key, nil), do: params
   def put_param(params, key, value), do: Keyword.put(params, key, value)
