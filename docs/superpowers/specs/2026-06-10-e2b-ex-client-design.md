@@ -75,7 +75,7 @@ request body.
 | `build_status/4` | GET `/templates/{id}/builds/{buildID}/status` | |
 | `build_logs/4` | GET `/templates/{id}/builds/{buildID}/logs` | |
 | `get_by_alias/2` | GET `/templates/aliases/{alias}` | |
-| `file_exists?/4` | GET `/templates/{id}/files/{hash}` | returns `{:ok, boolean}` |
+| `file_exists?/3` | GET `/templates/{id}/files/{hash}` | returns `{:ok, boolean}` |
 
 ### `E2bEx.Tags`
 
