@@ -21,6 +21,21 @@ defmodule E2bEx.Commands do
   A command that runs returns `{:ok, %E2bEx.CommandResult{}}` regardless of its
   exit code; `{:error, %E2bEx.Error{}}` is reserved for transport, connection, or
   protocol failures.
+
+  ## Background execution
+
+  Use `start/4` to run a command in the background; output arrives as messages and
+  `E2bEx.CommandHandle.wait/1` returns the result:
+
+      {:ok, h} = E2bEx.Commands.start(client, sandbox, "sleep 1; echo done")
+      receive do
+        {ref, {:stdout, data}} when ref == h.ref -> IO.write(data)
+      end
+      {:ok, result} = E2bEx.CommandHandle.wait(h)
+
+  Control a running command with `E2bEx.CommandHandle.kill/1`, `send_stdin/2`,
+  `close_stdin/1`, `disconnect/1`, or the by-pid `kill/4`, `send_stdin/5`,
+  `close_stdin/4`, `list/2`, and `connect/4`.
   """
 
   alias E2bEx.{Client, CommandHandle, CommandResult, Error, ProcessInfo, Sandbox}
@@ -29,9 +44,7 @@ defmodule E2bEx.Commands do
   alias E2bEx.Envd.Rpc
 
   @start_path "/process.Process/Start"
-  # Consumed by a later task's `connect/4`; defined alongside @start_path.
   @connect_path "/process.Process/Connect"
-  @paths %{start: @start_path, connect: @connect_path}
 
   @doc """
   Run `command` in `sandbox` and wait for it to finish.
@@ -219,7 +232,7 @@ defmodule E2bEx.Commands do
           {:ok, CommandHandle.t()} | {:error, Error.t()}
   def start(%Client{} = client, %Sandbox{} = sandbox, command, opts \\ []) when is_binary(command) do
     with {:ok, ctx} <- Rpc.context(client, sandbox, opts) do
-      spawn_handle(ctx, @paths.start, start_request(command, opts), opts)
+      spawn_handle(ctx, @start_path, start_request(command, opts), opts)
     end
   end
 
@@ -259,7 +272,7 @@ defmodule E2bEx.Commands do
           {:ok, CommandHandle.t()} | {:error, Error.t()}
   def connect(%Client{} = client, %Sandbox{} = sandbox, pid, opts \\ []) when is_integer(pid) do
     with {:ok, ctx} <- Rpc.context(client, sandbox, opts) do
-      spawn_handle(ctx, @paths.connect, %{process: %{pid: pid}}, opts)
+      spawn_handle(ctx, @connect_path, %{process: %{pid: pid}}, opts)
     end
   end
 
