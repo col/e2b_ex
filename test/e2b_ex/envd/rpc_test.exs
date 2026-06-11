@@ -69,4 +69,71 @@ defmodule E2bEx.Envd.RpcTest do
                Rpc.unary(ctx, "/process.Process/SendSignal", %{process: %{pid: 9}})
     end
   end
+
+  describe "control wrappers (via Bypass)" do
+    setup do
+      bypass = Bypass.open()
+      {:ok, ctx} = Rpc.context(client(), sandbox(), base_url: "http://localhost:#{bypass.port}")
+      {:ok, bypass: bypass, ctx: ctx}
+    end
+
+    test "kill/2 sends SIGKILL and returns {:ok, true} on success", %{bypass: bypass, ctx: ctx} do
+      Bypass.expect_once(bypass, "POST", "/process.Process/SendSignal", fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        assert Jason.decode!(raw) == %{"process" => %{"pid" => 7}, "signal" => "SIGNAL_SIGKILL"}
+        conn |> Plug.Conn.put_resp_content_type("application/json") |> Plug.Conn.resp(200, "{}")
+      end)
+
+      assert {:ok, true} = Rpc.kill(ctx, 7)
+    end
+
+    test "kill/2 returns {:ok, false} on a not_found Connect error", %{bypass: bypass, ctx: ctx} do
+      Bypass.expect_once(bypass, "POST", "/process.Process/SendSignal", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(404, ~s({"code":"not_found","message":"gone"}))
+      end)
+
+      assert {:ok, false} = Rpc.kill(ctx, 7)
+    end
+
+    test "send_stdin/3 base64-encodes the data into input.stdin", %{bypass: bypass, ctx: ctx} do
+      Bypass.expect_once(bypass, "POST", "/process.Process/SendInput", fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        assert Jason.decode!(raw) ==
+                 %{"process" => %{"pid" => 7}, "input" => %{"stdin" => Base.encode64("y\n")}}
+
+        conn |> Plug.Conn.put_resp_content_type("application/json") |> Plug.Conn.resp(200, "{}")
+      end)
+
+      assert :ok = Rpc.send_stdin(ctx, 7, "y\n")
+    end
+
+    test "close_stdin/2 posts the selector and returns :ok", %{bypass: bypass, ctx: ctx} do
+      Bypass.expect_once(bypass, "POST", "/process.Process/CloseStdin", fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        assert Jason.decode!(raw) == %{"process" => %{"pid" => 7}}
+        conn |> Plug.Conn.put_resp_content_type("application/json") |> Plug.Conn.resp(200, "{}")
+      end)
+
+      assert :ok = Rpc.close_stdin(ctx, 7)
+    end
+
+    test "list/1 returns the raw process maps", %{bypass: bypass, ctx: ctx} do
+      Bypass.expect_once(bypass, "POST", "/process.Process/List", fn conn ->
+        body = ~s({"processes":[{"pid":7,"config":{"cmd":"sleep"}}]})
+        conn |> Plug.Conn.put_resp_content_type("application/json") |> Plug.Conn.resp(200, body)
+      end)
+
+      assert {:ok, [%{"pid" => 7, "config" => %{"cmd" => "sleep"}}]} = Rpc.list(ctx)
+    end
+
+    test "kill/2 surfaces other failures as {:error, %Error{}}", %{bypass: bypass, ctx: ctx} do
+      Bypass.expect_once(bypass, "POST", "/process.Process/SendSignal", fn conn ->
+        conn |> Plug.Conn.put_resp_content_type("application/json") |> Plug.Conn.resp(503, ~s({"code":"unavailable","message":"down"}))
+      end)
+
+      assert {:error, %E2bEx.Error{status: 503}} = Rpc.kill(ctx, 7)
+    end
+  end
 end

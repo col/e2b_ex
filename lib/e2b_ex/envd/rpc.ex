@@ -1,9 +1,9 @@
 defmodule E2bEx.Envd.Rpc do
   @moduledoc false
   # The envd request layer: builds the per-sandbox connection context (base_url +
-  # headers) shared by the streaming and unary paths, and issues unary Connect
-  # calls (bare JSON). Control wrappers (kill/send_stdin/close_stdin/list) are
-  # added in a later task.
+  # headers) shared by the streaming and unary paths, issues unary Connect calls
+  # (bare JSON), and provides the process control wrappers (kill/send_stdin/
+  # close_stdin/list) built on top of them.
 
   alias E2bEx.{Client, Error, Sandbox}
 
@@ -65,6 +65,47 @@ defmodule E2bEx.Envd.Rpc do
       {:ok, %Req.Response{status: status, body: body}} when status in 200..299 -> {:ok, body}
       {:ok, %Req.Response{} = resp} -> {:error, Error.from_response(resp)}
       {:error, exception} -> {:error, Error.from_exception(exception)}
+    end
+  end
+
+  @doc "Kill a process by pid (SIGKILL). `{:ok, false}` if it was already gone."
+  @spec kill(ctx(), non_neg_integer()) :: {:ok, boolean()} | {:error, Error.t()}
+  def kill(ctx, pid) do
+    case unary(ctx, "/process.Process/SendSignal", %{process: %{pid: pid}, signal: "SIGNAL_SIGKILL"}) do
+      {:ok, _} -> {:ok, true}
+      {:error, %Error{code: "not_found"}} -> {:ok, false}
+      {:error, %Error{status: 404}} -> {:ok, false}
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc "Send data to a process's stdin by pid."
+  @spec send_stdin(ctx(), non_neg_integer(), binary()) :: :ok | {:error, Error.t()}
+  def send_stdin(ctx, pid, data) when is_binary(data) do
+    body = %{process: %{pid: pid}, input: %{stdin: Base.encode64(data)}}
+
+    case unary(ctx, "/process.Process/SendInput", body) do
+      {:ok, _} -> :ok
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc "Close a process's stdin (EOF) by pid."
+  @spec close_stdin(ctx(), non_neg_integer()) :: :ok | {:error, Error.t()}
+  def close_stdin(ctx, pid) do
+    case unary(ctx, "/process.Process/CloseStdin", %{process: %{pid: pid}}) do
+      {:ok, _} -> :ok
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc "List running processes; returns the raw `processes` maps."
+  @spec list(ctx()) :: {:ok, [map()]} | {:error, Error.t()}
+  def list(ctx) do
+    case unary(ctx, "/process.Process/List", %{}) do
+      {:ok, %{"processes" => procs}} when is_list(procs) -> {:ok, procs}
+      {:ok, _} -> {:ok, []}
+      {:error, _} = error -> error
     end
   end
 
