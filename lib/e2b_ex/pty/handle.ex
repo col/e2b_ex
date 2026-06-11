@@ -14,6 +14,7 @@ defmodule E2bEx.Pty.Handle do
   returns the result) — not both from the same process.
   """
 
+  alias E2bEx.{CommandResult, Error}
   alias E2bEx.Envd.Rpc
 
   @enforce_keys [:server, :ref, :pid, :context]
@@ -44,4 +45,41 @@ defmodule E2bEx.Pty.Handle do
   @doc "Kill the PTY (SIGKILL). `{:ok, false}` if it was already gone."
   @spec kill(t()) :: {:ok, boolean()} | {:error, E2bEx.Error.t()}
   def kill(%__MODULE__{context: ctx, pid: pid}), do: Rpc.kill(ctx, pid)
+
+  @doc """
+  Block until the PTY finishes and return its result.
+
+  Drains the intermediate `{ref, {:pty, _}}` messages from the caller's mailbox
+  and returns on the terminal message: `{:ok, %E2bEx.CommandResult{}}` for any
+  exit code (PTY output is **not** buffered, so `stdout`/`stderr` are empty), or
+  `{:error, %E2bEx.Error{}}`. Must be called from the subscriber process. Returns
+  `{:error, %E2bEx.Error{}}` if the handle server crashes.
+  """
+  @spec wait(t()) :: {:ok, CommandResult.t()} | {:error, Error.t()}
+  def wait(%__MODULE__{server: server, ref: ref}) do
+    mon = Process.monitor(server)
+    result = wait_loop(ref, mon)
+    Process.demonitor(mon, [:flush])
+    result
+  end
+
+  defp wait_loop(ref, mon) do
+    receive do
+      {^ref, {:exit, %CommandResult{} = result}} -> {:ok, result}
+      {^ref, {:error, %Error{} = error}} -> {:error, error}
+      {^ref, {:pty, _}} -> wait_loop(ref, mon)
+      {:DOWN, ^mon, :process, _pid, reason} ->
+        {:error, %Error{message: "command handle terminated", reason: reason}}
+    end
+  end
+
+  @doc """
+  Stop streaming from the PTY without killing it. The envd process keeps running;
+  reconnect with `E2bEx.Pty.connect/4`. No terminal message is sent.
+  """
+  @spec disconnect(t()) :: :ok
+  def disconnect(%__MODULE__{server: server}) do
+    if Process.alive?(server), do: GenServer.stop(server)
+    :ok
+  end
 end
