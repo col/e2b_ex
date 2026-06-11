@@ -150,9 +150,21 @@ streaming reducer:
   - otherwise → `{:ok, acc.result}`.
 
 `headers/5`, `start_request/2`, `with_timeout/2`, `fetch_sandbox_id/1`,
-`domain_from/1`, and the `apply_event/2` / `decode_chunk/1` folding helpers are
-reused. `decode_body: false` is retained (harmless; `into: fun` already bypasses
-body decoding) and `retry: false` stays.
+`domain_from/1`, and the `decode_chunk/1` helper are reused (the old buffered
+`apply_event/2` folding is replaced by the streaming reducer's equivalent).
+`decode_body: false` and `retry: false` stay.
+
+**Compression:** the request sets `compressed: false`. With `into: fun`, Req hands
+the reducer raw network bytes — its body-decompression step does not run — so the
+client must not advertise `accept-encoding: gzip`, or a compressed response would
+arrive as undecoded bytes and fail framing. The JS and Python SDKs likewise
+disable compression for the streaming process RPCs. (The previous buffered path
+decompressed transparently; streaming requires opting out explicitly.)
+
+**Non-2xx bodies:** the reducer appends each raw chunk to `resp.body` regardless of
+status and only runs incremental parsing for 2xx responses, so a non-2xx error
+body (e.g. a Connect unary auth error) still reaches `Error.from_response/1`
+intact — preserving today's behavior.
 
 ## Data flow (`run/4`)
 
