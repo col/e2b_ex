@@ -1,5 +1,6 @@
 defmodule E2bEx.Pty.HandleTest do
   use ExUnit.Case, async: true
+  import ExUnit.CaptureLog
   alias E2bEx.{Client, CommandResult, Error, Sandbox}
   alias E2bEx.Envd.{Connect, Rpc}
   alias E2bEx.Pty
@@ -93,8 +94,12 @@ defmodule E2bEx.Pty.HandleTest do
 
     {:ok, handle} = Pty.create(client(), sandbox(), cols: 80, rows: 24, base_url: base_url)
     # Brutally kill the server; wait/1 monitors it and returns on the :DOWN.
-    Process.exit(handle.server, :kill)
-    assert {:error, %Error{message: "command handle terminated"}} = Handle.wait(handle)
+    # capture_log swallows the expected Bypass teardown noise from the killed
+    # connection (the kill skips HandleServer.terminate/2, so Bypass grumbles).
+    capture_log(fn ->
+      Process.exit(handle.server, :kill)
+      assert {:error, %Error{message: "command handle terminated"}} = Handle.wait(handle)
+    end)
   end
 
   test "disconnect/1 stops the server and sends no terminal message", %{bypass: bypass} do
