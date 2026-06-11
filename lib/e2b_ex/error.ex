@@ -9,7 +9,7 @@ defmodule E2bEx.Error do
 
   @type t :: %__MODULE__{
           status: non_neg_integer() | nil,
-          code: integer() | nil,
+          code: integer() | String.t() | nil,
           message: String.t() | nil,
           reason: term() | nil,
           body: term()
