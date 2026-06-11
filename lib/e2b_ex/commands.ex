@@ -24,6 +24,7 @@ defmodule E2bEx.Commands do
   """
 
   alias E2bEx.{Client, CommandResult, Error, Sandbox}
+  alias E2bEx.Commands.Fold
   alias E2bEx.Envd.Connect
 
   @default_port 49_983
@@ -119,7 +120,7 @@ defmodule E2bEx.Commands do
   defp new_state(opts) do
     %{
       decoder: Connect.Decoder.new(),
-      result: %CommandResult{},
+      fold: Fold.new(),
       on_stdout: opts[:on_stdout],
       on_stderr: opts[:on_stderr],
       trailer: nil,
@@ -144,38 +145,20 @@ defmodule E2bEx.Commands do
 
   defp apply_messages(state, messages) do
     Enum.reduce_while(messages, {:ok, state}, fn message, {:ok, state} ->
-      case apply_event(state, message["event"]) do
-        {:ok, state} -> {:cont, {:ok, state}}
-        {:error, _} = error -> {:halt, error}
+      case Fold.apply_event(state.fold, message["event"]) do
+        {:ok, fold, outputs} ->
+          Enum.each(outputs, fn
+            {:stdout, bytes} -> invoke(state.on_stdout, bytes)
+            {:stderr, bytes} -> invoke(state.on_stderr, bytes)
+          end)
+
+          {:cont, {:ok, %{state | fold: fold}}}
+
+        {:error, _} = error ->
+          {:halt, error}
       end
     end)
   end
-
-  defp apply_event(state, %{"data" => %{"stdout" => chunk}}) do
-    with {:ok, bytes} <- decode_chunk(chunk) do
-      invoke(state.on_stdout, bytes)
-      {:ok, %{state | result: %{state.result | stdout: state.result.stdout <> bytes}}}
-    end
-  end
-
-  defp apply_event(state, %{"data" => %{"stderr" => chunk}}) do
-    with {:ok, bytes} <- decode_chunk(chunk) do
-      invoke(state.on_stderr, bytes)
-      {:ok, %{state | result: %{state.result | stderr: state.result.stderr <> bytes}}}
-    end
-  end
-
-  defp apply_event(state, %{"end" => end_event}) do
-    result = %{
-      state.result
-      | exit_code: Map.get(end_event, "exitCode", 0),
-        error: Map.get(end_event, "error")
-    }
-
-    {:ok, %{state | result: result}}
-  end
-
-  defp apply_event(state, _other), do: {:ok, state}
 
   defp invoke(nil, _chunk), do: :ok
 
@@ -195,23 +178,10 @@ defmodule E2bEx.Commands do
         {:error, %Error{message: "malformed envd response", reason: :malformed_frame, body: resp.body}}
 
       true ->
-        case trailer_error(state.trailer) do
+        case Connect.trailer_error(state.trailer) do
           %Error{} = error -> {:error, error}
-          nil -> {:ok, state.result}
+          nil -> {:ok, Fold.result(state.fold)}
         end
-    end
-  end
-
-  defp trailer_error(%{"error" => %{} = err}) do
-    %Error{message: err["message"], reason: err["code"], body: err}
-  end
-
-  defp trailer_error(_), do: nil
-
-  defp decode_chunk(chunk) do
-    case Base.decode64(chunk) do
-      {:ok, bytes} -> {:ok, bytes}
-      :error -> {:error, :invalid_base64}
     end
   end
 
