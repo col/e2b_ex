@@ -90,6 +90,29 @@ defmodule E2bEx.Envd.Rpc do
     end
   end
 
+  @doc "Send data to a PTY process's input by pid (PTY channel, not stdin)."
+  @spec send_pty_input(ctx(), non_neg_integer(), binary()) :: :ok | {:error, Error.t()}
+  def send_pty_input(ctx, pid, data) when is_binary(data) do
+    body = %{process: %{pid: pid}, input: %{pty: Base.encode64(data)}}
+
+    case unary(ctx, "/process.Process/SendInput", body) do
+      {:ok, _} -> :ok
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc "Resize a PTY process by pid (the Update RPC). `size` is `%{cols: c, rows: r}`."
+  @spec resize(ctx(), non_neg_integer(), %{cols: non_neg_integer(), rows: non_neg_integer()}) ::
+          :ok | {:error, Error.t()}
+  def resize(ctx, pid, %{cols: cols, rows: rows}) do
+    body = %{process: %{pid: pid}, pty: %{size: %{cols: cols, rows: rows}}}
+
+    case unary(ctx, "/process.Process/Update", body) do
+      {:ok, _} -> :ok
+      {:error, _} = error -> error
+    end
+  end
+
   @doc "Close a process's stdin (EOF) by pid."
   @spec close_stdin(ctx(), non_neg_integer()) :: :ok | {:error, Error.t()}
   def close_stdin(ctx, pid) do

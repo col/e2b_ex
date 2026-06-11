@@ -135,5 +135,39 @@ defmodule E2bEx.Envd.RpcTest do
 
       assert {:error, %E2bEx.Error{status: 503}} = Rpc.kill(ctx, 7)
     end
+
+    test "send_pty_input/3 base64-encodes the data into input.pty", %{bypass: bypass, ctx: ctx} do
+      Bypass.expect_once(bypass, "POST", "/process.Process/SendInput", fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        assert Jason.decode!(raw) ==
+                 %{"process" => %{"pid" => 7}, "input" => %{"pty" => Base.encode64("ls\r")}}
+
+        conn |> Plug.Conn.put_resp_content_type("application/json") |> Plug.Conn.resp(200, "{}")
+      end)
+
+      assert :ok = Rpc.send_pty_input(ctx, 7, "ls\r")
+    end
+
+    test "resize/3 posts the Update body with the pty size", %{bypass: bypass, ctx: ctx} do
+      Bypass.expect_once(bypass, "POST", "/process.Process/Update", fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        assert Jason.decode!(raw) ==
+                 %{"process" => %{"pid" => 7}, "pty" => %{"size" => %{"cols" => 120, "rows" => 40}}}
+
+        conn |> Plug.Conn.put_resp_content_type("application/json") |> Plug.Conn.resp(200, "{}")
+      end)
+
+      assert :ok = Rpc.resize(ctx, 7, %{cols: 120, rows: 40})
+    end
+
+    test "resize/3 surfaces a non-2xx error as {:error, %Error{}}", %{bypass: bypass, ctx: ctx} do
+      Bypass.expect_once(bypass, "POST", "/process.Process/Update", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(404, ~s({"code":"not_found","message":"gone"}))
+      end)
+
+      assert {:error, %Error{status: 404, code: "not_found"}} = Rpc.resize(ctx, 7, %{cols: 80, rows: 24})
+    end
   end
 end
