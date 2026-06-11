@@ -23,7 +23,7 @@ defmodule E2bEx.Commands do
   protocol failures.
   """
 
-  alias E2bEx.{Client, CommandResult, Error, Sandbox}
+  alias E2bEx.{Client, CommandResult, Error, ProcessInfo, Sandbox}
   alias E2bEx.Commands.Fold
   alias E2bEx.Envd.Connect
   alias E2bEx.Envd.Rpc
@@ -196,4 +196,35 @@ defmodule E2bEx.Commands do
 
   defp put_present(map, _key, nil), do: map
   defp put_present(map, key, value), do: Map.put(map, key, value)
+
+  @doc "List running commands/PTYs in `sandbox` (`/process.Process/List`)."
+  @spec list(Client.t(), Sandbox.t(), keyword()) :: {:ok, [ProcessInfo.t()]} | {:error, Error.t()}
+  def list(%Client{} = client, %Sandbox{} = sandbox, opts \\ []) do
+    with {:ok, ctx} <- Rpc.context(client, sandbox, opts),
+         {:ok, procs} <- Rpc.list(ctx) do
+      {:ok, Enum.map(procs, &ProcessInfo.from_api/1)}
+    end
+  end
+
+  @doc "Kill a process by pid (SIGKILL). `{:ok, false}` if it was already gone."
+  @spec kill(Client.t(), Sandbox.t(), non_neg_integer(), keyword()) ::
+          {:ok, boolean()} | {:error, Error.t()}
+  def kill(%Client{} = client, %Sandbox{} = sandbox, pid, opts \\ []) when is_integer(pid) do
+    with {:ok, ctx} <- Rpc.context(client, sandbox, opts), do: Rpc.kill(ctx, pid)
+  end
+
+  @doc "Send `data` to a process's stdin by pid (requires the process was started with `stdin: true`)."
+  @spec send_stdin(Client.t(), Sandbox.t(), non_neg_integer(), binary(), keyword()) ::
+          :ok | {:error, Error.t()}
+  def send_stdin(%Client{} = client, %Sandbox{} = sandbox, pid, data, opts \\ [])
+      when is_integer(pid) and is_binary(data) do
+    with {:ok, ctx} <- Rpc.context(client, sandbox, opts), do: Rpc.send_stdin(ctx, pid, data)
+  end
+
+  @doc "Close a process's stdin (EOF) by pid."
+  @spec close_stdin(Client.t(), Sandbox.t(), non_neg_integer(), keyword()) ::
+          :ok | {:error, Error.t()}
+  def close_stdin(%Client{} = client, %Sandbox{} = sandbox, pid, opts \\ []) when is_integer(pid) do
+    with {:ok, ctx} <- Rpc.context(client, sandbox, opts), do: Rpc.close_stdin(ctx, pid)
+  end
 end
