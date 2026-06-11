@@ -26,9 +26,13 @@ defmodule E2bEx.Commands do
   @doc """
   Run `command` in `sandbox` and wait for it to finish.
 
-  `sandbox` is an `%E2bEx.Sandbox{}` (from `E2bEx.Sandboxes.create/2`,
-  `connect/3`, or `get/2`) and must carry a `:sandbox_id`. `client` supplies
-  shared `Req` config via its `:req_options`.
+  `sandbox` is an `%E2bEx.Sandbox{}` and must carry a `:sandbox_id` and an
+  `:envd_access_token`. Use a sandbox from `E2bEx.Sandboxes.create/2`,
+  `connect/3`, or `get/2` — these return the access token. A sandbox from
+  `list/2` does **not** carry the token (the API omits it from listed
+  sandboxes), so envd will reject the request with `401`; call `connect/3` or
+  `get/2` on its `sandbox_id` first. `client` supplies shared `Req` config via
+  its `:req_options`.
 
   ## Options
     * `:cwd` — working directory.

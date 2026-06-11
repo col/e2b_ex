@@ -27,12 +27,19 @@ client = E2bEx.client(api_key: "e2b_...")
 
 ## Running commands in a sandbox
 
-Commands run directly against the sandbox's `envd` daemon (not the central API),
-using the `%E2bEx.Sandbox{}` returned by `create/2` or `connect/3`:
+Commands run directly against the sandbox's `envd` daemon (not the central API).
+This requires a `%E2bEx.Sandbox{}` carrying an `:envd_access_token` — which means
+one returned by `create/2`, `connect/3`, or `get/2`. The `list/2` endpoint does
+**not** return the access token (the API omits it from listed sandboxes), so a
+sandbox from `list/2` will get a `401` from envd; call `connect/3` or `get/2`
+first to obtain a token-bearing sandbox:
 
 ```elixir
 client = E2bEx.client(api_key: "e2b_...")
 {:ok, sandbox} = E2bEx.Sandboxes.create(client, %{templateID: "base"})
+
+# Or, from an existing sandbox id (e.g. one found via list/2):
+{:ok, sandbox} = E2bEx.Sandboxes.connect(client, sandbox_id, 60)
 
 {:ok, result} =
   E2bEx.Commands.run(client, sandbox,
