@@ -74,6 +74,29 @@ defmodule E2bEx.Pty do
     end
   end
 
+  @doc "Send `data` to a PTY's input channel by pid."
+  @spec send_input(Client.t(), Sandbox.t(), non_neg_integer(), binary(), keyword()) ::
+          :ok | {:error, Error.t()}
+  def send_input(%Client{} = client, %Sandbox{} = sandbox, pid, data, opts \\ [])
+      when is_integer(pid) and is_binary(data) do
+    with {:ok, ctx} <- Rpc.context(client, sandbox, opts), do: Rpc.send_pty_input(ctx, pid, data)
+  end
+
+  @doc "Resize a PTY by pid. `size` is `%{cols: c, rows: r}`."
+  @spec resize(Client.t(), Sandbox.t(), non_neg_integer(), %{cols: non_neg_integer(), rows: non_neg_integer()}, keyword()) ::
+          :ok | {:error, Error.t()}
+  def resize(%Client{} = client, %Sandbox{} = sandbox, pid, %{cols: _, rows: _} = size, opts \\ [])
+      when is_integer(pid) do
+    with {:ok, ctx} <- Rpc.context(client, sandbox, opts), do: Rpc.resize(ctx, pid, size)
+  end
+
+  @doc "Kill a PTY by pid (SIGKILL). `{:ok, false}` if it was already gone."
+  @spec kill(Client.t(), Sandbox.t(), non_neg_integer(), keyword()) ::
+          {:ok, boolean()} | {:error, Error.t()}
+  def kill(%Client{} = client, %Sandbox{} = sandbox, pid, opts \\ []) when is_integer(pid) do
+    with {:ok, ctx} <- Rpc.context(client, sandbox, opts), do: Rpc.kill(ctx, pid)
+  end
+
   # ---- request building ----
 
   defp fetch_size!(opts) do

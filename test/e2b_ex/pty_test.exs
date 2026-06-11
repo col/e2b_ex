@@ -89,4 +89,34 @@ defmodule E2bEx.PtyTest do
     ref = handle.ref
     assert_receive {^ref, {:pty, "back"}}
   end
+
+  test "send_input/5 sends data to the pty channel by pid", %{bypass: bypass, base_url: base_url} do
+    Bypass.expect_once(bypass, "POST", "/process.Process/SendInput", fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      assert Jason.decode!(raw) == %{"process" => %{"pid" => 9}, "input" => %{"pty" => Base.encode64("q")}}
+      conn |> Plug.Conn.put_resp_content_type("application/json") |> Plug.Conn.resp(200, "{}")
+    end)
+
+    assert :ok = Pty.send_input(client(), sandbox(), 9, "q", base_url: base_url)
+  end
+
+  test "resize/5 resizes by pid", %{bypass: bypass, base_url: base_url} do
+    Bypass.expect_once(bypass, "POST", "/process.Process/Update", fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      assert Jason.decode!(raw) == %{"process" => %{"pid" => 9}, "pty" => %{"size" => %{"cols" => 200, "rows" => 50}}}
+      conn |> Plug.Conn.put_resp_content_type("application/json") |> Plug.Conn.resp(200, "{}")
+    end)
+
+    assert :ok = Pty.resize(client(), sandbox(), 9, %{cols: 200, rows: 50}, base_url: base_url)
+  end
+
+  test "kill/4 kills by pid", %{bypass: bypass, base_url: base_url} do
+    Bypass.expect_once(bypass, "POST", "/process.Process/SendSignal", fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      assert Jason.decode!(raw) == %{"process" => %{"pid" => 9}, "signal" => "SIGNAL_SIGKILL"}
+      conn |> Plug.Conn.put_resp_content_type("application/json") |> Plug.Conn.resp(200, "{}")
+    end)
+
+    assert {:ok, true} = Pty.kill(client(), sandbox(), 9, base_url: base_url)
+  end
 end
