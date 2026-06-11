@@ -63,6 +63,7 @@ result.error      # nil, or a command-level error string from the end event
   - `:timeout_ms` — total command/stream timeout; default `60_000`; `0` disables.
   - `:domain` — override the sandbox domain.
   - `:port` — envd port; default `49983`.
+  - `:base_url` — override the full envd base URL (advanced; self-hosted/proxy/testing).
 
 ### `E2bEx.CommandResult`
 
@@ -190,7 +191,7 @@ data::binary-size(len)>>`.
     event with an explicit `exitCode`, an `end` event with `exitCode` omitted
     (defaults handled by the caller), a success trailer (`{}`), an error trailer,
     and returns `{:error, _}` on truncated/garbage framing.
-- **`E2bEx.Commands`** (via `Req.Test` plug):
+- **`E2bEx.Commands`** (via a **Bypass** local HTTP server — see note):
   - Stubs the envd endpoint; asserts method `POST`, path `/process.Process/Start`,
     the `x-access-token` / `content-type` / `e2b-sandbox-id` headers, and the
     decoded `StartRequest` body (cmd `/bin/bash`, args `["-l","-c", command]`,
@@ -198,16 +199,23 @@ data::binary-size(len)>>`.
     returned `%CommandResult{}` (stdout/stderr/exit_code).
   - A non-zero exit returns `{:ok, %CommandResult{exit_code: n}}`.
   - A trailer error frame returns `{:error, %E2bEx.Error{}}`.
-  - A transport error returns `{:error, %E2bEx.Error{reason: ...}}`.
+  - A non-2xx envd response returns `{:error, %E2bEx.Error{status: n}}`.
+  - A transport error (`Bypass.down/1`) returns `{:error, %E2bEx.Error{reason: ...}}`.
+  - A malformed base64 chunk returns `{:error, %E2bEx.Error{}}`.
   - `:user` opt adds the `Authorization: Basic` header; `:cwd`/`:envs` reach the
     request body.
 
-Note: `Req.Test` routes by the `plug` in `req_options` regardless of host, so the
-same test client used for central-API tests works for envd tests; the plug can
-assert on `conn.host` if needed. Fixtures are hand-built framed bytes (helpers in
-the test module) since these payloads are not in `openapi.yml`.
+Note: `Req.Test` **cannot** test this — its plug adapter runs `Plug.Parsers`
+(JSON, `pass: ["*/*"]`) on the request body before the stub, and the
+`application/connect+json` content-type makes it try to JSON-decode the framed
+binary body, raising before the stub runs. Tests therefore use **Bypass** (a real
+loopback HTTP server, no `Plug.Parsers`), pointed at via the `:base_url` opt. This
+also yields genuine on-the-wire transport coverage. Fixtures are hand-built framed
+bytes (helpers in the test module) since these payloads are not in `openapi.yml`.
 
 ## Dependencies
 
-No new dependencies. Uses `Req` (already present) and `Jason` (transitive via
-Req); base64 via the standard `Base` module; framing via binary pattern matching.
+One new **test-only** dependency: `{:bypass, "~> 2.1", only: :test}` (real local
+HTTP server for the command tests). Runtime uses `Req` (already present) and
+`Jason` (transitive via Req); base64 via the standard `Base` module; framing via
+binary pattern matching.
