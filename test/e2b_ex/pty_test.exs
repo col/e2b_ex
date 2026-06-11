@@ -119,4 +119,11 @@ defmodule E2bEx.PtyTest do
 
     assert {:ok, true} = Pty.kill(client(), sandbox(), 9, base_url: base_url)
   end
+
+  test "create/3 surfaces a context failure as {:error, %Error{}} (after the size check)" do
+    bad_sandbox = %Sandbox{sandbox_id: nil}
+
+    assert {:error, %E2bEx.Error{message: "sandbox is missing :sandbox_id" <> _}} =
+             Pty.create(client(), bad_sandbox, cols: 80, rows: 24)
+  end
 end
