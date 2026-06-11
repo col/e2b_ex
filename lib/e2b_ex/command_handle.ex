@@ -15,6 +15,7 @@ defmodule E2bEx.CommandHandle do
   returns the result) — not both from the same process.
   """
 
+  alias E2bEx.{CommandResult, Error}
   alias E2bEx.Envd.Rpc
 
   @enforce_keys [:server, :ref, :pid, :context]
@@ -43,6 +44,32 @@ defmodule E2bEx.CommandHandle do
   @doc "Close the command's stdin (EOF)."
   @spec close_stdin(t()) :: :ok | {:error, E2bEx.Error.t()}
   def close_stdin(%__MODULE__{context: ctx, pid: pid}), do: Rpc.close_stdin(ctx, pid)
+
+  @doc """
+  Block until the command finishes and return its result.
+
+  Drains the intermediate `{ref, {:stdout|:stderr, _}}` messages from the caller's
+  mailbox and returns on the terminal message: `{:ok, %E2bEx.CommandResult{}}` for
+  any exit code, or `{:error, %E2bEx.Error{}}`. Must be called from the subscriber
+  process. Returns `{:error, %E2bEx.Error{}}` if the handle server crashes.
+  """
+  @spec wait(t()) :: {:ok, CommandResult.t()} | {:error, Error.t()}
+  def wait(%__MODULE__{server: server, ref: ref}) do
+    mon = Process.monitor(server)
+    result = wait_loop(ref, mon)
+    Process.demonitor(mon, [:flush])
+    result
+  end
+
+  defp wait_loop(ref, mon) do
+    receive do
+      {^ref, {:exit, %CommandResult{} = result}} -> {:ok, result}
+      {^ref, {:error, %Error{} = error}} -> {:error, error}
+      {^ref, {:stdout, _}} -> wait_loop(ref, mon)
+      {^ref, {:stderr, _}} -> wait_loop(ref, mon)
+      {:DOWN, ^mon, :process, _pid, reason} -> {:error, %Error{message: "command handle terminated", reason: reason}}
+    end
+  end
 
   @doc """
   Stop streaming from the command without killing it. The envd process keeps
