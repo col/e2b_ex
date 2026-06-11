@@ -108,4 +108,24 @@ defmodule E2bEx.CommandsBackgroundTest do
     assert CommandHandle.pid(handle) == 3
     assert_receive {^ref, {:error, %E2bEx.Error{message: "malformed envd response"}}}
   end
+
+  test "connect/4 reconnects to a running pid and yields the result", %{bypass: bypass, base_url: base_url} do
+    Bypass.expect_once(bypass, "POST", "/process.Process/Connect", fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      <<0::8, len::unsigned-big-32, json::binary-size(len)>> = raw
+      assert Jason.decode!(json) == %{"process" => %{"pid" => 42}}
+
+      body =
+        frame(%{"event" => %{"start" => %{"pid" => 42}}}) <>
+          frame(%{"event" => %{"data" => %{"stdout" => Base.encode64("back")}}}) <>
+          frame(%{"event" => %{"end" => %{"exited" => true}}}) <>
+          trailer("{}")
+
+      Plug.Conn.resp(conn, 200, body)
+    end)
+
+    {:ok, handle} = Commands.connect(client(), sandbox(), 42, base_url: base_url)
+    assert E2bEx.CommandHandle.pid(handle) == 42
+    assert {:ok, %E2bEx.CommandResult{stdout: "back"}} = E2bEx.CommandHandle.wait(handle)
+  end
 end

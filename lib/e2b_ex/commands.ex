@@ -250,6 +250,19 @@ defmodule E2bEx.Commands do
     end
   end
 
+  @doc """
+  Reconnect to a running command by `pid` and return a `CommandHandle` that streams
+  its output (`/process.Process/Connect`). Options: `:subscriber`, `:timeout_ms`,
+  `:domain`, `:port`, `:base_url`.
+  """
+  @spec connect(Client.t(), Sandbox.t(), non_neg_integer(), keyword()) ::
+          {:ok, CommandHandle.t()} | {:error, Error.t()}
+  def connect(%Client{} = client, %Sandbox{} = sandbox, pid, opts \\ []) when is_integer(pid) do
+    with {:ok, ctx} <- Rpc.context(client, sandbox, opts) do
+      spawn_handle(ctx, @paths.connect, %{process: %{pid: pid}}, opts)
+    end
+  end
+
   @doc "List running commands/PTYs in `sandbox` (`/process.Process/List`)."
   @spec list(Client.t(), Sandbox.t(), keyword()) :: {:ok, [ProcessInfo.t()]} | {:error, Error.t()}
   def list(%Client{} = client, %Sandbox{} = sandbox, opts \\ []) do
