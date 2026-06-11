@@ -104,7 +104,6 @@ defmodule E2bEx.Commands do
   # in `resp.private[:e2b_stream]`.
   defp collector(opts) do
     fn {:data, chunk}, {req, resp} ->
-      # Raw bytes are kept only so a non-2xx error body survives for Error.from_response/1; a later phase could skip this once status is known to be 2xx.
       resp = %{resp | body: (resp.body || "") <> chunk}
 
       if resp.status in 200..299 do
@@ -191,6 +190,9 @@ defmodule E2bEx.Commands do
     cond do
       state.error != nil ->
         {:error, %Error{message: "malformed envd response", reason: state.error, body: resp.body}}
+
+      state.decoder.buffer != "" ->
+        {:error, %Error{message: "malformed envd response", reason: :malformed_frame, body: resp.body}}
 
       true ->
         case trailer_error(state.trailer) do

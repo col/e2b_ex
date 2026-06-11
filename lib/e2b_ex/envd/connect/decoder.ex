@@ -29,8 +29,8 @@ defmodule E2bEx.Envd.Connect.Decoder do
   remainder. Returns `{:error, {:invalid_json, reason}}` if a *complete* frame's
   payload is not valid JSON. An incomplete frame is buffered, never an error.
 
-  Once a non-nil `trailer` is returned the stream has ended; callers should stop
-  feeding bytes. Any subsequent pushes are buffered but not decoded.
+  The decoder keeps no end-of-stream state across calls; once a non-nil `trailer`
+  is returned the stream has ended and callers should stop feeding it bytes.
   """
   @spec push(t(), binary()) ::
           {:ok, [map()], map() | nil, t()} | {:error, {:invalid_json, term()}}

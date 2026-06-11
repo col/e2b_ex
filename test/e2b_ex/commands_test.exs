@@ -189,6 +189,38 @@ defmodule E2bEx.CommandsTest do
     assert Agent.get(sink, & &1) == ["hello world"]
   end
 
+  test "run/4 treats a truncated 2xx stream (leftover partial frame) as malformed",
+       %{bypass: bypass, base_url: base_url} do
+    Bypass.expect_once(bypass, "POST", "/process.Process/Start", fn conn ->
+      complete = frame(%{"event" => %{"data" => %{"stdout" => Base.encode64("hi")}}})
+      # Header claims 50 bytes but far fewer follow -> frame never completes.
+      truncated = <<0::8, 50::unsigned-big-32, "not enough">>
+      Plug.Conn.resp(conn, 200, complete <> truncated)
+    end)
+
+    assert {:error, %Error{message: "malformed envd response"}} =
+             Commands.run(client(), sandbox(), "echo", base_url: base_url)
+  end
+
+  test "run/4 propagates a raising on_stdout callback to the caller",
+       %{bypass: bypass, base_url: base_url} do
+    Bypass.expect_once(bypass, "POST", "/process.Process/Start", fn conn ->
+      body =
+        frame(%{"event" => %{"data" => %{"stdout" => Base.encode64("hi")}}}) <>
+          frame(%{"event" => %{"end" => %{"exited" => true}}}) <>
+          trailer("{}")
+
+      Plug.Conn.resp(conn, 200, body)
+    end)
+
+    assert_raise RuntimeError, "boom", fn ->
+      Commands.run(client(), sandbox(), "echo",
+        base_url: base_url,
+        on_stdout: fn _ -> raise "boom" end
+      )
+    end
+  end
+
   # Split a binary into consecutive parts of at most `n` bytes (keeps the remainder).
   defp chunk_bytes(bin, n) when byte_size(bin) > n do
     <<part::binary-size(n), rest::binary>> = bin
