@@ -43,4 +43,23 @@ defmodule E2bEx.Commands.FoldTest do
     assert {:error, :invalid_base64} =
              Fold.apply_event(Fold.new(), %{"data" => %{"stdout" => "!!! not base64 !!!"}})
   end
+
+  test "folds a pty data event, emitting {:pty, bytes} and accumulating nothing" do
+    {:ok, acc, outputs} = Fold.apply_event(Fold.new(), %{"data" => %{"pty" => Base.encode64("\e[0m$ ")}})
+    assert outputs == [{:pty, "\e[0m$ "}]
+    assert Fold.result(acc) == %CommandResult{stdout: "", stderr: ""}
+  end
+
+  test "an end event after pty data still sets exit_code, leaving output empty" do
+    {:ok, acc, _} = Fold.apply_event(Fold.new(), %{"data" => %{"pty" => Base.encode64("hi")}})
+    {:ok, acc, outputs} = Fold.apply_event(acc, %{"end" => %{"exitCode" => 130}})
+    assert outputs == []
+    assert Fold.ended?(acc)
+    assert Fold.result(acc) == %CommandResult{stdout: "", stderr: "", exit_code: 130}
+  end
+
+  test "returns an error on an invalid base64 pty chunk" do
+    assert {:error, :invalid_base64} =
+             Fold.apply_event(Fold.new(), %{"data" => %{"pty" => "!!! not base64 !!!"}})
+  end
 end

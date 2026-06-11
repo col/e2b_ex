@@ -7,7 +7,7 @@ defmodule E2bEx.Commands.Fold do
 
   alias E2bEx.CommandResult
 
-  @type output :: {:stdout, binary()} | {:stderr, binary()}
+  @type output :: {:stdout, binary()} | {:stderr, binary()} | {:pty, binary()}
 
   defstruct result: %CommandResult{}, ended: false
 
@@ -26,6 +26,12 @@ defmodule E2bEx.Commands.Fold do
   def apply_event(acc, %{"data" => %{"stderr" => chunk}}) do
     with {:ok, bytes} <- decode_chunk(chunk) do
       {:ok, %{acc | result: %{acc.result | stderr: acc.result.stderr <> bytes}}, [{:stderr, bytes}]}
+    end
+  end
+
+  def apply_event(acc, %{"data" => %{"pty" => chunk}}) do
+    with {:ok, bytes} <- decode_chunk(chunk) do
+      {:ok, acc, [{:pty, bytes}]}
     end
   end
 
