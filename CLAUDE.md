@@ -49,6 +49,15 @@ The library talks to **two different hosts**, and this distinction matters:
   `wait/1` (draining receive + crash monitor), `kill/1`, `send_stdin/2`, `close_stdin/1`,
   `disconnect/1`, `pid/1`. Control ops delegate to `Envd.Rpc` (caller's process); `wait`
   /`disconnect` talk to the server. **No live getters** — output is push (messages).
+- `e2b_ex/pty.ex` — `E2bEx.Pty`. PTY surface over the envd Process API: `create/3`
+  (launches `/bin/bash -i -l` on a PTY of `:cols`×`:rows`, → `%Pty.Handle{}`),
+  `connect/4` (reconnect by pid), and by-pid `send_input/5`/`resize/5`/`kill/4`.
+  Reuses `Commands.HandleServer` for streaming; output is the merged `{:pty, _}`
+  channel, not stdout/stderr. No `Pty.list` (listing stays on `Commands`).
+- `e2b_ex/pty/handle.ex` — `E2bEx.Pty.Handle`: `%{server, ref, pid, context}` +
+  `send_input/2`, `resize/2`, `kill/1`, `disconnect/1`, `wait/1` (drains `{:pty, _}`,
+  returns exit-code-only `%CommandResult{}`), `pid/1`. No `close_stdin` (not in the
+  PTY surface). Same message-first model as `CommandHandle`.
 - `e2b_ex/commands/handle_server.ex` — `E2bEx.Commands.HandleServer` (GenServer, internal):
   owns one `Start`/`Connect` server-stream via Req `into: :self`, folds via `Fold`,
   pushes `{ref, {:stdout|:stderr, _}}` then terminal `{ref, {:exit|:error, _}}` to a
@@ -56,10 +65,13 @@ The library talks to **two different hosts**, and this distinction matters:
   `terminate/2` cancels the async response so `disconnect` closes the connection.
 - `e2b_ex/commands/fold.ex` — `E2bEx.Commands.Fold`: pure, delivery-agnostic folding of
   decoded events into `%CommandResult{}` (returns output events; `ended?/1`). Shared by
-  `run/4` (→ callbacks) and `HandleServer` (→ messages).
+  `run/4` (→ callbacks) and `HandleServer` (→ messages). Also emits `{:pty, _}` for
+  `data.pty` events (emit-only — PTY output is never accumulated into the result).
 - `e2b_ex/envd/rpc.ex` — `E2bEx.Envd.Rpc` (internal): builds the envd connection context
   (`context/3`: base_url + headers), issues **unary** Connect calls (`unary/4`, bare
   JSON), and the control wrappers `kill/2`/`send_stdin/3`/`close_stdin/2`/`list/1`.
+  Adds `send_pty_input/3` (the `pty` input channel) and `resize/3` (the `Update` RPC)
+  for PTY.
 - `e2b_ex/process_info.ex` — `E2bEx.ProcessInfo` struct (`pid`, `tag`, `cmd`, `args`,
   `envs`, `cwd`) + `from_api/1`; returned by `list/2`.
 - `e2b_ex/envd/connect.ex` — Connect-protocol framing (whole-body `decode_frames/1`,
@@ -186,9 +198,12 @@ Bringing `E2bEx.Commands` to parity with the JS/Python SDKs, in sequence:
   `Envd.Rpc`, `ProcessInfo` and the unary `SendSignal`/`SendInput`/`CloseStdin`/`List` +
   streaming `Connect` RPCs. (Message-first, not the SDKs' polling-object model.)
   Spec: `docs/superpowers/specs/2026-06-11-e2b-commands-background-design.md`.
-- **Phase 3 — planned:** PTY (`create`/`connect`/`send_stdin`/`resize`/`kill`/`list`).
-  `ProcessInfo` already carries `tag` and is PTY-ready; PTY adds the `Update` (resize)
-  RPC and `pty` data-event handling. Two noted refactor opportunities to fold in: collapse
-  the near-duplicate streaming-request construction in `Commands.run/4` and
-  `HandleServer.handle_continue` into `Rpc`, and share the `receive_timeout(ms) -> ms + 5_000`
-  grace constant (currently duplicated in `HandleServer` and `Commands.with_timeout/2`).
+- **Phase 3 — DONE:** PTY — `E2bEx.Pty` (`create`/`connect`/`send_input`/`resize`/
+  `kill`) + `E2bEx.Pty.Handle`. Background-only (no blocking `run` analog); reuses
+  `HandleServer` untouched. Added the `Update` (resize) RPC, the `SendInput` pty
+  channel, and a `pty` (emit-only) branch in `Fold`. Note: there is **no** `Pty.list`
+  (neither SDK has one; listing stays on `Commands`). Spec:
+  `docs/superpowers/specs/2026-06-11-e2b-pty-design.md`; plan:
+  `docs/superpowers/plans/2026-06-11-e2b-pty.md`. The two flagged refactors (shared
+  `receive_timeout` constant; collapsing streaming-request construction into `Rpc`)
+  remain deferred.
