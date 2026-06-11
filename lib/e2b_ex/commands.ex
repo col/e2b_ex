@@ -26,10 +26,8 @@ defmodule E2bEx.Commands do
   alias E2bEx.{Client, CommandResult, Error, Sandbox}
   alias E2bEx.Commands.Fold
   alias E2bEx.Envd.Connect
+  alias E2bEx.Envd.Rpc
 
-  @default_port 49_983
-  @default_domain "e2b.app"
-  @default_timeout_ms 60_000
   @start_path "/process.Process/Start"
 
   @doc """
@@ -51,9 +49,10 @@ defmodule E2bEx.Commands do
     * `:cwd` — working directory.
     * `:envs` — environment variables (`%{String.t() => String.t()}`).
     * `:user` — Linux user to run as (adds an `Authorization: Basic` header).
-    * `:timeout_ms` — total command timeout; default `#{@default_timeout_ms}`, `0` disables.
+    * `:timeout_ms` — total command timeout; default `60000`, `0` disables.
+      (defaults are defined in `E2bEx.Envd.Rpc`)
     * `:domain` — override the sandbox domain.
-    * `:port` — envd port; default `#{@default_port}`.
+    * `:port` — envd port; default `49983`.
     * `:base_url` — override the full envd base URL (advanced; self-hosted/testing).
 
   Callbacks run synchronously in arrival order from the calling process; a callback
@@ -62,27 +61,23 @@ defmodule E2bEx.Commands do
   @spec run(Client.t(), Sandbox.t(), String.t(), keyword()) ::
           {:ok, CommandResult.t()} | {:error, Error.t()}
   def run(%Client{} = client, %Sandbox{} = sandbox, command, opts \\ []) when is_binary(command) do
-    with {:ok, sandbox_id} <- fetch_sandbox_id(sandbox) do
-      domain = sandbox.domain || opts[:domain] || domain_from(client)
-      port = opts[:port] || @default_port
-      timeout_ms = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
-      base_url = opts[:base_url] || "https://#{port}-#{sandbox_id}.#{domain}"
+    with {:ok, ctx} <- Rpc.context(client, sandbox, opts) do
       body = Connect.encode_frame(Jason.encode!(start_request(command, opts)))
 
       req =
         Req.new(
           method: :post,
-          base_url: base_url,
+          base_url: ctx.base_url,
           url: @start_path,
-          headers: headers(sandbox, sandbox_id, port, timeout_ms, opts),
+          headers: ctx.headers,
           body: body,
           retry: false,
           decode_body: false,
           compressed: false,
           into: collector(opts)
         )
-        |> Req.merge(client.req_options)
-        |> with_timeout(timeout_ms)
+        |> Req.merge(ctx.req_options)
+        |> with_timeout(ctx.timeout_ms)
 
       case Req.request(req) do
         {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
@@ -187,16 +182,6 @@ defmodule E2bEx.Commands do
 
   # ---- request building ----
 
-  defp fetch_sandbox_id(%Sandbox{sandbox_id: id}) when is_binary(id) and id != "", do: {:ok, id}
-  defp fetch_sandbox_id(_), do: {:error, %Error{message: "sandbox is missing :sandbox_id"}}
-
-  defp domain_from(%Client{base_url: base_url}) do
-    case URI.parse(base_url) do
-      %URI{host: host} when is_binary(host) -> String.replace_prefix(host, "api.", "")
-      _ -> @default_domain
-    end
-  end
-
   defp start_request(command, opts) do
     process =
       %{cmd: "/bin/bash", args: ["-l", "-c", command]}
@@ -206,26 +191,9 @@ defmodule E2bEx.Commands do
     %{process: process, stdin: false}
   end
 
-  defp headers(sandbox, sandbox_id, port, timeout_ms, opts) do
-    %{
-      "content-type" => "application/connect+json",
-      "connect-protocol-version" => "1",
-      "e2b-sandbox-id" => sandbox_id,
-      "e2b-sandbox-port" => Integer.to_string(port),
-      "keepalive-ping-interval" => "50"
-    }
-    |> put_when(sandbox.envd_access_token, "x-access-token", sandbox.envd_access_token)
-    |> put_when(timeout_ms != 0, "connect-timeout-ms", Integer.to_string(timeout_ms))
-    |> put_when(opts[:user], "authorization", "Basic " <> Base.encode64("#{opts[:user]}:"))
-  end
-
   defp with_timeout(req, 0), do: Req.merge(req, receive_timeout: :infinity)
   defp with_timeout(req, ms), do: Req.merge(req, receive_timeout: ms + 5_000)
 
   defp put_present(map, _key, nil), do: map
   defp put_present(map, key, value), do: Map.put(map, key, value)
-
-  defp put_when(map, nil, _key, _value), do: map
-  defp put_when(map, false, _key, _value), do: map
-  defp put_when(map, _truthy, key, value), do: Map.put(map, key, value)
 end
