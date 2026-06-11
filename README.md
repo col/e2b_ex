@@ -68,8 +68,36 @@ runs. `run/4` still blocks and returns the fully accumulated
 result.stdout # => "1\n2\n3\n"
 ```
 
-Background execution, `kill`/stdin, reconnecting, and PTY are planned in later
-phases.
+Background execution and reconnecting are available via `start/4`/`connect/4`;
+PTY is planned for a later phase.
+
+### Background commands
+
+`start/4` runs a command without blocking and returns a `%E2bEx.CommandHandle{}`.
+Output is delivered to the subscriber (the caller by default) as messages tagged
+with the handle's `ref`; `E2bEx.CommandHandle.wait/1` blocks for the result:
+
+```elixir
+{:ok, h} = E2bEx.Commands.start(client, sandbox, "make")
+
+receive do
+  {ref, {:stdout, data}} when ref == h.ref -> IO.write(data)
+end
+
+{:ok, result} = E2bEx.CommandHandle.wait(h)  # {:ok, %E2bEx.CommandResult{}}
+```
+
+Control a running command:
+
+```elixir
+{:ok, procs}   = E2bEx.Commands.list(client, sandbox)          # [%E2bEx.ProcessInfo{}]
+{:ok, h2}      = E2bEx.Commands.connect(client, sandbox, pid)  # reconnect
+{:ok, killed?} = E2bEx.CommandHandle.kill(h)
+:ok            = E2bEx.CommandHandle.send_stdin(h, "y\n")      # start(stdin: true)
+:ok            = E2bEx.CommandHandle.disconnect(h)             # stop streaming, keep running
+```
+
+PTY support is planned for a later phase.
 
 Configuration can also come from application config:
 
