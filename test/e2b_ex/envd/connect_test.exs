@@ -44,6 +44,11 @@ defmodule E2bEx.Envd.ConnectTest do
     assert {:error, :malformed_frame} = Connect.decode_frames(body)
   end
 
+  test "decode_frames/1 treats bytes after the trailer as malformed" do
+    body = trailer("{}") <> frame(%{"event" => %{"data" => %{"stdout" => "aGk="}}})
+    assert {:error, :malformed_frame} = Connect.decode_frames(body)
+  end
+
   test "decode_frames/1 returns an error on invalid JSON in a frame" do
     body = <<0::8, 3::unsigned-big-32, "{[}">>
     assert {:error, {:invalid_json, _}} = Connect.decode_frames(body)

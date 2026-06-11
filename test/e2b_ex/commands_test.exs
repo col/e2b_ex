@@ -128,4 +128,104 @@ defmodule E2bEx.CommandsTest do
 
     assert {:error, %Error{status: 503}} = Commands.run(client(), sandbox(), "echo hi", base_url: base_url)
   end
+
+  test "run/4 streams stdout/stderr to callbacks in arrival order across network chunks",
+       %{bypass: bypass, base_url: base_url} do
+    Bypass.expect_once(bypass, "POST", "/process.Process/Start", fn conn ->
+      body =
+        frame(%{"event" => %{"start" => %{"pid" => 7}}}) <>
+          frame(%{"event" => %{"data" => %{"stdout" => Base.encode64("foo")}}}) <>
+          frame(%{"event" => %{"data" => %{"stderr" => Base.encode64("bar")}}}) <>
+          frame(%{"event" => %{"data" => %{"stdout" => Base.encode64("baz")}}}) <>
+          frame(%{"event" => %{"end" => %{"exited" => true}}}) <>
+          trailer("{}")
+
+      conn = Plug.Conn.send_chunked(conn, 200)
+
+      Enum.reduce(chunk_bytes(body, 7), conn, fn part, conn ->
+        {:ok, conn} = Plug.Conn.chunk(conn, part)
+        conn
+      end)
+    end)
+
+    {:ok, sink} = Agent.start_link(fn -> [] end)
+    record = fn tag -> fn data -> Agent.update(sink, &[{tag, data} | &1]) end end
+
+    assert {:ok, %CommandResult{stdout: "foobaz", stderr: "bar", exit_code: 0}} =
+             Commands.run(client(), sandbox(), "echo",
+               base_url: base_url,
+               on_stdout: record.(:out),
+               on_stderr: record.(:err)
+             )
+
+    assert Enum.reverse(Agent.get(sink, & &1)) == [{:out, "foo"}, {:err, "bar"}, {:out, "baz"}]
+  end
+
+  test "run/4 reassembles a single output chunk whose frame spans two network chunks",
+       %{bypass: bypass, base_url: base_url} do
+    Bypass.expect_once(bypass, "POST", "/process.Process/Start", fn conn ->
+      body =
+        frame(%{"event" => %{"data" => %{"stdout" => Base.encode64("hello world")}}}) <>
+          frame(%{"event" => %{"end" => %{"exited" => true}}}) <>
+          trailer("{}")
+
+      # Split mid-first-frame so the stdout payload arrives in two pieces.
+      <<first::binary-size(6), second::binary>> = body
+      conn = Plug.Conn.send_chunked(conn, 200)
+      {:ok, conn} = Plug.Conn.chunk(conn, first)
+      {:ok, conn} = Plug.Conn.chunk(conn, second)
+      conn
+    end)
+
+    {:ok, sink} = Agent.start_link(fn -> [] end)
+
+    assert {:ok, %CommandResult{stdout: "hello world"}} =
+             Commands.run(client(), sandbox(), "echo",
+               base_url: base_url,
+               on_stdout: fn data -> Agent.update(sink, &[data | &1]) end
+             )
+
+    # Exactly one callback invocation with the whole reassembled payload.
+    assert Agent.get(sink, & &1) == ["hello world"]
+  end
+
+  test "run/4 treats a truncated 2xx stream (leftover partial frame) as malformed",
+       %{bypass: bypass, base_url: base_url} do
+    Bypass.expect_once(bypass, "POST", "/process.Process/Start", fn conn ->
+      complete = frame(%{"event" => %{"data" => %{"stdout" => Base.encode64("hi")}}})
+      # Header claims 50 bytes but far fewer follow -> frame never completes.
+      truncated = <<0::8, 50::unsigned-big-32, "not enough">>
+      Plug.Conn.resp(conn, 200, complete <> truncated)
+    end)
+
+    assert {:error, %Error{message: "malformed envd response"}} =
+             Commands.run(client(), sandbox(), "echo", base_url: base_url)
+  end
+
+  test "run/4 propagates a raising on_stdout callback to the caller",
+       %{bypass: bypass, base_url: base_url} do
+    Bypass.expect_once(bypass, "POST", "/process.Process/Start", fn conn ->
+      body =
+        frame(%{"event" => %{"data" => %{"stdout" => Base.encode64("hi")}}}) <>
+          frame(%{"event" => %{"end" => %{"exited" => true}}}) <>
+          trailer("{}")
+
+      Plug.Conn.resp(conn, 200, body)
+    end)
+
+    assert_raise RuntimeError, "boom", fn ->
+      Commands.run(client(), sandbox(), "echo",
+        base_url: base_url,
+        on_stdout: fn _ -> raise "boom" end
+      )
+    end
+  end
+
+  # Split a binary into consecutive parts of at most `n` bytes (keeps the remainder).
+  defp chunk_bytes(bin, n) when byte_size(bin) > n do
+    <<part::binary-size(n), rest::binary>> = bin
+    [part | chunk_bytes(rest, n)]
+  end
+
+  defp chunk_bytes(bin, _n), do: [bin]
 end

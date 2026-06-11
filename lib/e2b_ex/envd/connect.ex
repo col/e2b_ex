@@ -4,10 +4,10 @@ defmodule E2bEx.Envd.Connect do
   #
   # Each frame is `<<flags::8, length::unsigned-big-32, data::binary-size(length)>>`.
   # Normal messages use flags 0; the end-of-stream trailer sets bit 0x02.
+  # Incremental decoding lives in `E2bEx.Envd.Connect.Decoder`; this module wraps it
+  # for the whole-body (buffered) case.
 
-  import Bitwise
-
-  @end_stream_flag 0x02
+  alias E2bEx.Envd.Connect.Decoder
 
   @doc "Wrap a payload in a single Connect frame (flags 0)."
   @spec encode_frame(binary()) :: binary()
@@ -20,47 +20,18 @@ defmodule E2bEx.Envd.Connect do
 
   `messages` is the list of JSON-decoded non-trailer frames; `trailer` is the
   JSON-decoded end-of-stream frame, or `nil` when none is present. Returns
-  `{:error, :malformed_frame}` on truncated framing or `{:error, {:invalid_json,
-  reason}}` when a frame's payload is not valid JSON.
+  `{:error, :malformed_frame}` when the body does not parse cleanly into whole
+  frames — i.e. truncated framing, or extra bytes remaining after the
+  end-of-stream trailer — and `{:error, {:invalid_json, reason}}` when a frame's
+  payload is not valid JSON.
   """
   @spec decode_frames(binary()) ::
           {:ok, [map()], map() | nil} | {:error, :malformed_frame | {:invalid_json, term()}}
   def decode_frames(body) when is_binary(body) do
-    with {:ok, frames} <- split(body, []) do
-      {trailers, messages} = Enum.split_with(frames, fn {flags, _} -> trailer?(flags) end)
-
-      with {:ok, decoded} <- decode_each(messages, []),
-           {:ok, trailer} <- decode_trailer(trailers) do
-        {:ok, decoded, trailer}
-      end
-    end
-  end
-
-  defp trailer?(flags), do: (flags &&& @end_stream_flag) != 0
-
-  defp split(<<>>, acc), do: {:ok, Enum.reverse(acc)}
-
-  defp split(<<flags::8, len::unsigned-big-32, data::binary-size(len), rest::binary>>, acc),
-    do: split(rest, [{flags, data} | acc])
-
-  defp split(_partial, _acc), do: {:error, :malformed_frame}
-
-  defp decode_each([], acc), do: {:ok, Enum.reverse(acc)}
-
-  defp decode_each([{_flags, data} | rest], acc) do
-    case Jason.decode(data) do
-      {:ok, map} -> decode_each(rest, [map | acc])
-      {:error, reason} -> {:error, {:invalid_json, reason}}
-    end
-  end
-
-  defp decode_trailer([]), do: {:ok, nil}
-  defp decode_trailer([{_flags, ""} | _]), do: {:ok, %{}}
-
-  defp decode_trailer([{_flags, data} | _]) do
-    case Jason.decode(data) do
-      {:ok, map} -> {:ok, map}
-      {:error, reason} -> {:error, {:invalid_json, reason}}
+    case Decoder.push(Decoder.new(), body) do
+      {:ok, messages, trailer, %Decoder{buffer: ""}} -> {:ok, messages, trailer}
+      {:ok, _messages, _trailer, %Decoder{buffer: _leftover}} -> {:error, :malformed_frame}
+      {:error, reason} -> {:error, reason}
     end
   end
 end

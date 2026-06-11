@@ -51,7 +51,25 @@ result.stdout     # "..."
 
 `run/4` returns `{:ok, %E2bEx.CommandResult{}}` whenever the command runs (check
 `exit_code` for success); `{:error, %E2bEx.Error{}}` signals it could not be run.
-Options: `:cwd`, `:envs`, `:user`, `:timeout_ms`.
+Options: `:on_stdout`, `:on_stderr`, `:cwd`, `:envs`, `:user`, `:timeout_ms`.
+
+### Streaming output
+
+Pass `:on_stdout` / `:on_stderr` to receive output incrementally as the command
+runs. `run/4` still blocks and returns the fully accumulated
+`%E2bEx.CommandResult{}`:
+
+```elixir
+{:ok, result} =
+  E2bEx.Commands.run(client, sandbox, "for i in 1 2 3; do echo $i; sleep 1; done",
+    on_stdout: &IO.write/1,
+    on_stderr: fn chunk -> IO.write(:stderr, chunk) end)
+
+result.stdout # => "1\n2\n3\n"
+```
+
+Background execution, `kill`/stdin, reconnecting, and PTY are planned in later
+phases.
 
 Configuration can also come from application config:
 
