@@ -23,12 +23,15 @@ defmodule E2bEx.Commands do
   protocol failures.
   """
 
-  alias E2bEx.{Client, CommandResult, Error, ProcessInfo, Sandbox}
-  alias E2bEx.Commands.Fold
+  alias E2bEx.{Client, CommandHandle, CommandResult, Error, ProcessInfo, Sandbox}
+  alias E2bEx.Commands.{Fold, HandleServer}
   alias E2bEx.Envd.Connect
   alias E2bEx.Envd.Rpc
 
   @start_path "/process.Process/Start"
+  # Consumed by a later task's `connect/4`; defined alongside @start_path.
+  @connect_path "/process.Process/Connect"
+  @paths %{start: @start_path, connect: @connect_path}
 
   @doc """
   Run `command` in `sandbox` and wait for it to finish.
@@ -188,7 +191,7 @@ defmodule E2bEx.Commands do
       |> put_present(:cwd, opts[:cwd])
       |> put_present(:envs, opts[:envs])
 
-    %{process: process, stdin: false}
+    %{process: process, stdin: opts[:stdin] || false}
   end
 
   defp with_timeout(req, 0), do: Req.merge(req, receive_timeout: :infinity)
@@ -196,6 +199,56 @@ defmodule E2bEx.Commands do
 
   defp put_present(map, _key, nil), do: map
   defp put_present(map, key, value), do: Map.put(map, key, value)
+
+  @doc """
+  Start `command` in `sandbox` in the background and return a `CommandHandle`.
+
+  Output is streamed to the subscriber (`opts[:subscriber]`, default the calling
+  process) as `{handle.ref, {:stdout|:stderr, binary}}` messages, ending with a
+  terminal `{handle.ref, {:exit, %E2bEx.CommandResult{}}}` (any exit code) or
+  `{handle.ref, {:error, %E2bEx.Error{}}}`. Use the message stream or
+  `E2bEx.CommandHandle.wait/1`.
+
+  ## Options
+    * `:subscriber` — pid to receive output messages (default the caller).
+    * `:stdin` — open stdin so `send_stdin/2` works (default `false`).
+    * `:cwd`, `:envs`, `:user`, `:timeout_ms`, `:domain`, `:port`, `:base_url` —
+      as for `run/4`.
+  """
+  @spec start(Client.t(), Sandbox.t(), String.t(), keyword()) ::
+          {:ok, CommandHandle.t()} | {:error, Error.t()}
+  def start(%Client{} = client, %Sandbox{} = sandbox, command, opts \\ []) when is_binary(command) do
+    with {:ok, ctx} <- Rpc.context(client, sandbox, opts) do
+      spawn_handle(ctx, @paths.start, start_request(command, opts), opts)
+    end
+  end
+
+  defp spawn_handle(ctx, path, request, opts) do
+    ref = make_ref()
+    subscriber = opts[:subscriber] || self()
+
+    arg = %{
+      ctx: ctx,
+      path: path,
+      request: request,
+      subscriber: subscriber,
+      ref: ref,
+      timeout_ms: ctx.timeout_ms
+    }
+
+    with {:ok, server} <- HandleServer.start(arg) do
+      await = if ctx.timeout_ms == 0, do: :infinity, else: ctx.timeout_ms
+
+      try do
+        case GenServer.call(server, :await_start, await) do
+          {:ok, pid} -> {:ok, %CommandHandle{server: server, ref: ref, pid: pid, context: ctx}}
+          {:error, error} -> {:error, error}
+        end
+      catch
+        :exit, _ -> {:error, %Error{message: "command failed to start"}}
+      end
+    end
+  end
 
   @doc "List running commands/PTYs in `sandbox` (`/process.Process/List`)."
   @spec list(Client.t(), Sandbox.t(), keyword()) :: {:ok, [ProcessInfo.t()]} | {:error, Error.t()}
