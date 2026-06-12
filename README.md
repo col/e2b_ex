@@ -140,6 +140,20 @@ PTY default envs (`TERM=xterm-256color`, `LANG`/`LC_ALL=C.UTF-8`) are merged
 under any `:envs` you pass; `:cwd`, `:user`, `:timeout_ms`, and `:subscriber`
 work as for `E2bEx.Commands`.
 
+### A full interactive terminal (`mix e2b.terminal`)
+
+For a real terminal — arrow keys, tab-completion, `vim`/`htop`, Ctrl-C — use the Mix task from a normal shell (not from `iex`). It puts your terminal into raw mode and bridges it to a sandbox PTY:
+
+```sh
+# Attach to a running sandbox:
+mix e2b.terminal SANDBOX_ID
+
+# Or create a fresh sandbox from a template, attach, and kill it on exit:
+mix e2b.terminal --template base
+```
+
+The API key comes from `--api-key`, else `E2B_API_KEY`, else `config :e2b_ex, api_key: ...`. To leave, end the remote shell (`exit` or Ctrl-D); the terminal is restored automatically. (Programmatically, the bridge is `E2bEx.Pty.Terminal.run/2` over an `E2bEx.Pty` handle.)
+
 Configuration can also come from application config:
 
 ```elixir
