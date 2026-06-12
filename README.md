@@ -68,8 +68,8 @@ runs. `run/4` still blocks and returns the fully accumulated
 result.stdout # => "1\n2\n3\n"
 ```
 
-Background execution and reconnecting are available via `start/4`/`connect/4`;
-PTY is planned for a later phase.
+Background execution (`start/4`), reconnecting (`connect/4`), and interactive
+PTY sessions (`E2bEx.Pty`) are covered below.
 
 ### Background commands
 
@@ -78,10 +78,11 @@ Output is delivered to the subscriber (the caller by default) as messages tagged
 with the handle's `ref`; `E2bEx.CommandHandle.wait/1` blocks for the result:
 
 ```elixir
-{:ok, h} = E2bEx.Commands.start(client, sandbox, "make")
+{:ok, h} = E2bEx.Commands.start(client, sandbox, ~s(codex exec --full-auto --skip-git-repo-check "Create a hello world HTTP server in Go"))
 
 receive do
   {ref, {:stdout, data}} when ref == h.ref -> IO.write(data)
+  other -> IO.inspect(other, label: "Other event")
 end
 
 {:ok, result} = E2bEx.CommandHandle.wait(h)  # {:ok, %E2bEx.CommandResult{}}
@@ -97,7 +98,47 @@ Control a running command:
 :ok            = E2bEx.CommandHandle.disconnect(h)             # stop streaming, keep running
 ```
 
-PTY support is planned for a later phase.
+### Interactive PTY sessions
+
+`E2bEx.Pty.create/3` launches an interactive login shell (`/bin/bash -i -l`)
+attached to a pseudo-terminal of the given size, returning a
+`%E2bEx.Pty.Handle{}`. Unlike a command, you drive a PTY by *sending input*
+(typing) rather than passing a command string, and its output is a single merged
+terminal stream delivered as `{ref, {:pty, bytes}}` messages (not split into
+stdout/stderr). `:cols` and `:rows` are required:
+
+```elixir
+{:ok, pty} = E2bEx.Pty.create(client, sandbox, cols: 80, rows: 24)
+
+receive do
+  {ref, {:pty, data}} when ref == pty.ref -> IO.binwrite(data)
+end
+
+:ok = E2bEx.Pty.Handle.send_input(pty, "ls -la\r")          # drive it by typing
+:ok = E2bEx.Pty.Handle.resize(pty, %{cols: 120, rows: 40})  # resize the terminal
+```
+
+Output is delivered to the subscriber (the caller by default) until a terminal
+`{ref, {:exit, %E2bEx.CommandResult{}}}` (any exit code) or
+`{ref, {:error, %E2bEx.Error{}}}`. `wait/1` drains the stream and returns the
+result — exit code only, since PTY output is streamed live rather than buffered:
+
+```elixir
+{:ok, result} = E2bEx.Pty.Handle.wait(pty)   # {:ok, %E2bEx.CommandResult{exit_code: ...}}
+```
+
+Control a running PTY, or reconnect to one by pid:
+
+```elixir
+{:ok, pty2}    = E2bEx.Pty.connect(client, sandbox, pid)             # reconnect, stream its output
+{:ok, killed?} = E2bEx.Pty.Handle.kill(pty)                          # SIGKILL
+:ok            = E2bEx.Pty.Handle.disconnect(pty)                    # stop streaming, keep running
+:ok            = E2bEx.Pty.send_input(client, sandbox, pid, "exit\r") # by-pid variants also exist
+```
+
+PTY default envs (`TERM=xterm-256color`, `LANG`/`LC_ALL=C.UTF-8`) are merged
+under any `:envs` you pass; `:cwd`, `:user`, `:timeout_ms`, and `:subscriber`
+work as for `E2bEx.Commands`.
 
 Configuration can also come from application config:
 
