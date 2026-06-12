@@ -8,6 +8,7 @@ defmodule E2bEx.Envd.Connect do
   # for the whole-body (buffered) case.
 
   alias E2bEx.Envd.Connect.Decoder
+  alias E2bEx.Error
 
   @doc "Wrap a payload in a single Connect frame (flags 0)."
   @spec encode_frame(binary()) :: binary()
@@ -34,4 +35,15 @@ defmodule E2bEx.Envd.Connect do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  @doc """
+  Map an end-of-stream trailer to an `%E2bEx.Error{}` when it carries a Connect
+  error, or `nil` for a success/`nil` trailer.
+  """
+  @spec trailer_error(map() | nil) :: E2bEx.Error.t() | nil
+  def trailer_error(%{"error" => %{} = err}) do
+    %Error{message: err["message"], reason: err["code"], body: err}
+  end
+
+  def trailer_error(_), do: nil
 end

@@ -40,10 +40,42 @@ The library talks to **two different hosts**, and this distinction matters:
 - `e2b_ex/sandboxes.ex` — list/create/get/kill/pause/connect/set_timeout/set_network/
   refresh/snapshot/list_snapshots/metrics/list_metrics/logs.
 - `e2b_ex/templates.ex`, `e2b_ex/tags.ex` — Templates and Tags resources.
-- `e2b_ex/commands.ex` — `E2bEx.Commands.run/4`: blocking command execution over envd
-  Connect, with optional `:on_stdout`/`:on_stderr` streaming callbacks.
+- `e2b_ex/commands.ex` — `E2bEx.Commands`. Public surface over the envd Process API:
+  `run/4` (blocking, `{:ok, %CommandResult{}}`, optional `:on_stdout`/`:on_stderr`
+  callbacks), `start/4` (background → `%CommandHandle{}`), `connect/4` (reconnect to a
+  pid), `list/2`, and by-pid `kill/4`/`send_stdin/5`/`close_stdin/4`. `run/4` uses a
+  buffered `into: fun` reducer; `start/4`/`connect/4` spawn a `HandleServer`.
+- `e2b_ex/command_handle.ex` — `E2bEx.CommandHandle`: `%{server, ref, pid, context}` +
+  `wait/1` (draining receive + crash monitor), `kill/1`, `send_stdin/2`, `close_stdin/1`,
+  `disconnect/1`, `pid/1`. Control ops delegate to `Envd.Rpc` (caller's process); `wait`
+  /`disconnect` talk to the server. **No live getters** — output is push (messages).
+- `e2b_ex/pty.ex` — `E2bEx.Pty`. PTY surface over the envd Process API: `create/3`
+  (launches `/bin/bash -i -l` on a PTY of `:cols`×`:rows`, → `%Pty.Handle{}`),
+  `connect/4` (reconnect by pid), and by-pid `send_input/5`/`resize/5`/`kill/4`.
+  Reuses `Commands.HandleServer` for streaming; output is the merged `{:pty, _}`
+  channel, not stdout/stderr. No `Pty.list` (listing stays on `Commands`).
+- `e2b_ex/pty/handle.ex` — `E2bEx.Pty.Handle`: `%{server, ref, pid, context}` +
+  `send_input/2`, `resize/2`, `kill/1`, `disconnect/1`, `wait/1` (drains `{:pty, _}`,
+  returns exit-code-only `%CommandResult{}`), `pid/1`. No `close_stdin` (not in the
+  PTY surface). Same message-first model as `CommandHandle`.
+- `e2b_ex/commands/handle_server.ex` — `E2bEx.Commands.HandleServer` (GenServer, internal):
+  owns one `Start`/`Connect` server-stream via Req `into: :self`, folds via `Fold`,
+  pushes `{ref, {:stdout|:stderr, _}}` then terminal `{ref, {:exit|:error, _}}` to a
+  subscriber. Replies to `:await_start` with the envd pid on the first `start` event.
+  `terminate/2` cancels the async response so `disconnect` closes the connection.
+- `e2b_ex/commands/fold.ex` — `E2bEx.Commands.Fold`: pure, delivery-agnostic folding of
+  decoded events into `%CommandResult{}` (returns output events; `ended?/1`). Shared by
+  `run/4` (→ callbacks) and `HandleServer` (→ messages). Also emits `{:pty, _}` for
+  `data.pty` events (emit-only — PTY output is never accumulated into the result).
+- `e2b_ex/envd/rpc.ex` — `E2bEx.Envd.Rpc` (internal): builds the envd connection context
+  (`context/3`: base_url + headers), issues **unary** Connect calls (`unary/4`, bare
+  JSON), and the control wrappers `kill/2`/`send_stdin/3`/`close_stdin/2`/`list/1`.
+  Adds `send_pty_input/3` (the `pty` input channel) and `resize/3` (the `Update` RPC)
+  for PTY.
+- `e2b_ex/process_info.ex` — `E2bEx.ProcessInfo` struct (`pid`, `tag`, `cmd`, `args`,
+  `envs`, `cwd`) + `from_api/1`; returned by `list/2`.
 - `e2b_ex/envd/connect.ex` — Connect-protocol framing (whole-body `decode_frames/1`,
-  `encode_frame/1`).
+  `encode_frame/1`, `trailer_error/1`).
 - `e2b_ex/envd/connect/decoder.ex` — `E2bEx.Envd.Connect.Decoder`: pure **incremental**
   frame decoder (`new/0`, `push/2`) that buffers partial frames across network chunks.
   `decode_frames/1` is implemented on top of it.
@@ -52,11 +84,20 @@ The library talks to **two different hosts**, and this distinction matters:
 
 - **Return shapes:** read calls return `{:ok, struct | [struct]}`; void/lifecycle calls
   return `:ok`; everything fails with `{:error, %E2bEx.Error{}}`.
-- **Commands never raise on non-zero exit.** `run/4` returns `{:ok, %CommandResult{}}`
-  for *any* exit code (check `exit_code`); this diverges intentionally from the JS/Python
-  SDKs, whose `wait()` raises `CommandExitError`. `{:error, …}` is reserved for
-  transport/non-2xx/trailer/malformed-framing failures. (Elixir idiom, like
-  `System.cmd/3`.)
+- **Commands never raise on non-zero exit.** `run/4` (and `wait/1`) return
+  `{:ok, %CommandResult{}}` for *any* exit code (check `exit_code`); this diverges
+  intentionally from the JS/Python SDKs, whose `wait()` raises `CommandExitError`.
+  `{:error, …}` is reserved for transport/non-2xx/trailer/malformed-framing failures.
+  (Elixir idiom, like `System.cmd/3`.)
+- **Background is message-first, not a transliterated SDK object.** `start/4` returns a
+  handle and pushes output as `{ref, {:stdout|:stderr, _}}` / terminal
+  `{ref, {:exit|:error, _}}` messages to a subscriber (Port / active-socket style).
+  Consume the message stream **or** call `wait/1` (which drains it), not both. There are
+  no polling getters and no callbacks running inside the handle process — `start/4`'s
+  output is async, so it uses messages; `run/4`'s `:on_stdout`/`:on_stderr` are
+  synchronous (run in the caller). One deliberate divergence: a 2xx stream that closes
+  with **no `end` event** is `{:ok, exit_code: 0}` for `run/4` (Phase 1 contract
+  preserved) but `{:error, "command ended without a result"}` for `wait/1`.
 - Each `lib` file has one focused responsibility; tests mirror the structure under
   `test/e2b_ex/`.
 
@@ -74,12 +115,21 @@ The library talks to **two different hosts**, and this distinction matters:
   from `ListedSandbox`). A `list`-derived sandbox will get `401` from envd — call
   `connect/3` or `get/2` first to obtain a token-bearing sandbox. `:user` adds an
   `Authorization: Basic base64("user:")` header.
-- Streaming uses `Req`'s `into: fun` reducer with `compressed: false` (with `into: fun`
-  Req does not run its body-decompression step, so the client must not advertise gzip).
+- Streaming uses `Req`'s `into: fun` reducer (blocking `run/4`) or `into: :self` (the
+  background `HandleServer`, which then parses messages with `Req.parse_message/2`), both
+  with `compressed: false` (with `into:` Req does not run its body-decompression step, so
+  the client must not advertise gzip).
+- **Streaming vs unary.** Only `Start` and `Connect` are server-streaming (enveloped
+  `application/connect+json` frames). The control RPCs — `List`, `SendSignal` (kill),
+  `SendInput` (stdin), `CloseStdin` — are **unary**: plain `application/json` POSTs with a
+  bare JSON body, errors as HTTP non-2xx with a `{"code","message"}` body. `Envd.Rpc.unary/4`
+  handles these (Req JSON-encodes/decodes them); `kill`'s `not_found`/404 → `{:ok, false}`.
+  proto3 JSON: the `ProcessSelector` oneof serializes as `{"pid": N}`, `bytes` (stdin) as
+  base64, the `Signal` enum as `"SIGNAL_SIGKILL"`.
 
 ## Testing
 
-- `mix test` (87 tests as of Phase 1). `mix compile --warnings-as-errors` must stay clean.
+- `mix test` (121 tests as of Phase 2). `mix compile --warnings-as-errors` must stay clean.
 - Central-API resources are tested with **`Req.Test`** (Plug-based stubs via
   `req_options: [plug: {Req.Test, Mod}]`).
 - **`E2bEx.Commands` is tested with `Bypass`** (a real loopback HTTP server), NOT
@@ -89,6 +139,11 @@ The library talks to **two different hosts**, and this distinction matters:
   real wire. Commands tests use the `:base_url` opt to point at Bypass (also a legit
   self-hosted/proxy escape hatch). Streaming tests use `Plug.Conn.send_chunked/2` +
   `chunk/2` to split framed bytes across network chunks and prove incremental decoding.
+- **The `disconnect/1` test** keeps the stream open with a keepalive-writing Bypass
+  handler that uses `Process.flag(:trap_exit, true)` + an `{:EXIT, _, _}` arm: cancelling
+  the client request closes the socket, and cowboy delivers the hangup to its handler as a
+  `:shutdown` EXIT — the handler must catch it (not just a `chunk/2` `{:error, _}`) to exit
+  cleanly so Bypass's `on_exit` doesn't re-raise.
 
 ## Reference material
 
@@ -115,6 +170,14 @@ The library talks to **two different hosts**, and this distinction matters:
 - **Truncated 2xx command streams:** `Commands.finalize/1` treats a non-empty decoder
   buffer at end-of-response as `{:error, "malformed envd response"}` — a partial frame
   means the stream was cut short. Keep that check.
+- **`disconnect/1` must cancel the async response.** `HandleServer.terminate/2` calls
+  `Req.cancel_async_response/1`. Finch's HTTP1 async streamer is `spawn_link`ed to the
+  owner *and* monitors it, but a `:normal` owner exit does NOT kill it (link rule) — it
+  only tears down on the next chunk or the receive timeout. So without the explicit
+  cancel, `disconnect` would leave the envd connection lingering. Don't remove it.
+- **`Error.code` is a string for envd Connect errors** (`"not_found"`, `"unavailable"`)
+  but an integer for central-API errors (`404`). `@type code :: integer() | String.t() | nil`.
+  `Rpc.kill/2` pattern-matches `%Error{code: "not_found"}`.
 
 ## Development workflow
 
@@ -129,8 +192,18 @@ Bringing `E2bEx.Commands` to parity with the JS/Python SDKs, in sequence:
 
 - **Phase 1 — DONE:** streaming foundation (incremental decoder + `on_stdout`/`on_stderr`).
   Spec: `docs/superpowers/specs/2026-06-11-e2b-commands-streaming-design.md`.
-- **Phase 2 — planned:** background execution + a GenServer-backed `CommandHandle`
-  (`wait`/`kill`/`disconnect`/`send_stdin`/`close_stdin`/live getters), plus `list` and
-  `connect`/reconnect. These add the unary Connect RPCs `SendSignal`, `SendInput`,
-  `CloseStdin`, `List`, and the streaming `Connect` RPC.
-- **Phase 3 — planned:** PTY (`create`/`connect`/`send_stdin`/`resize`/`kill`/`list`).
+- **Phase 2 — DONE:** background execution — `start/4` → message-streaming
+  `CommandHandle` (`wait`/`kill`/`disconnect`/`send_stdin`/`close_stdin`/`pid`), plus
+  `connect/4` reconnect, `list/2`, and by-pid control. Added `HandleServer`, `Fold`,
+  `Envd.Rpc`, `ProcessInfo` and the unary `SendSignal`/`SendInput`/`CloseStdin`/`List` +
+  streaming `Connect` RPCs. (Message-first, not the SDKs' polling-object model.)
+  Spec: `docs/superpowers/specs/2026-06-11-e2b-commands-background-design.md`.
+- **Phase 3 — DONE:** PTY — `E2bEx.Pty` (`create`/`connect`/`send_input`/`resize`/
+  `kill`) + `E2bEx.Pty.Handle`. Background-only (no blocking `run` analog); reuses
+  `HandleServer` untouched. Added the `Update` (resize) RPC, the `SendInput` pty
+  channel, and a `pty` (emit-only) branch in `Fold`. Note: there is **no** `Pty.list`
+  (neither SDK has one; listing stays on `Commands`). Spec:
+  `docs/superpowers/specs/2026-06-11-e2b-pty-design.md`; plan:
+  `docs/superpowers/plans/2026-06-11-e2b-pty.md`. The two flagged refactors (shared
+  `receive_timeout` constant; collapsing streaming-request construction into `Rpc`)
+  remain deferred.

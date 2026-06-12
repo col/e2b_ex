@@ -21,15 +21,30 @@ defmodule E2bEx.Commands do
   A command that runs returns `{:ok, %E2bEx.CommandResult{}}` regardless of its
   exit code; `{:error, %E2bEx.Error{}}` is reserved for transport, connection, or
   protocol failures.
+
+  ## Background execution
+
+  Use `start/4` to run a command in the background; output arrives as messages and
+  `E2bEx.CommandHandle.wait/1` returns the result:
+
+      {:ok, h} = E2bEx.Commands.start(client, sandbox, "sleep 1; echo done")
+      receive do
+        {ref, {:stdout, data}} when ref == h.ref -> IO.write(data)
+      end
+      {:ok, result} = E2bEx.CommandHandle.wait(h)
+
+  Control a running command with `E2bEx.CommandHandle.kill/1`, `send_stdin/2`,
+  `close_stdin/1`, `disconnect/1`, or the by-pid `kill/4`, `send_stdin/5`,
+  `close_stdin/4`, `list/2`, and `connect/4`.
   """
 
-  alias E2bEx.{Client, CommandResult, Error, Sandbox}
+  alias E2bEx.{Client, CommandHandle, CommandResult, Error, ProcessInfo, Sandbox}
+  alias E2bEx.Commands.{Fold, HandleServer}
   alias E2bEx.Envd.Connect
+  alias E2bEx.Envd.Rpc
 
-  @default_port 49_983
-  @default_domain "e2b.app"
-  @default_timeout_ms 60_000
   @start_path "/process.Process/Start"
+  @connect_path "/process.Process/Connect"
 
   @doc """
   Run `command` in `sandbox` and wait for it to finish.
@@ -50,9 +65,10 @@ defmodule E2bEx.Commands do
     * `:cwd` — working directory.
     * `:envs` — environment variables (`%{String.t() => String.t()}`).
     * `:user` — Linux user to run as (adds an `Authorization: Basic` header).
-    * `:timeout_ms` — total command timeout; default `#{@default_timeout_ms}`, `0` disables.
+    * `:timeout_ms` — total command timeout; default `60000`, `0` disables.
+      (defaults are defined in `E2bEx.Envd.Rpc`)
     * `:domain` — override the sandbox domain.
-    * `:port` — envd port; default `#{@default_port}`.
+    * `:port` — envd port; default `49983`.
     * `:base_url` — override the full envd base URL (advanced; self-hosted/testing).
 
   Callbacks run synchronously in arrival order from the calling process; a callback
@@ -61,27 +77,23 @@ defmodule E2bEx.Commands do
   @spec run(Client.t(), Sandbox.t(), String.t(), keyword()) ::
           {:ok, CommandResult.t()} | {:error, Error.t()}
   def run(%Client{} = client, %Sandbox{} = sandbox, command, opts \\ []) when is_binary(command) do
-    with {:ok, sandbox_id} <- fetch_sandbox_id(sandbox) do
-      domain = sandbox.domain || opts[:domain] || domain_from(client)
-      port = opts[:port] || @default_port
-      timeout_ms = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
-      base_url = opts[:base_url] || "https://#{port}-#{sandbox_id}.#{domain}"
+    with {:ok, ctx} <- Rpc.context(client, sandbox, opts) do
       body = Connect.encode_frame(Jason.encode!(start_request(command, opts)))
 
       req =
         Req.new(
           method: :post,
-          base_url: base_url,
+          base_url: ctx.base_url,
           url: @start_path,
-          headers: headers(sandbox, sandbox_id, port, timeout_ms, opts),
+          headers: ctx.headers,
           body: body,
           retry: false,
           decode_body: false,
           compressed: false,
           into: collector(opts)
         )
-        |> Req.merge(client.req_options)
-        |> with_timeout(timeout_ms)
+        |> Req.merge(ctx.req_options)
+        |> with_timeout(ctx.timeout_ms)
 
       case Req.request(req) do
         {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
@@ -119,7 +131,7 @@ defmodule E2bEx.Commands do
   defp new_state(opts) do
     %{
       decoder: Connect.Decoder.new(),
-      result: %CommandResult{},
+      fold: Fold.new(),
       on_stdout: opts[:on_stdout],
       on_stderr: opts[:on_stderr],
       trailer: nil,
@@ -144,38 +156,20 @@ defmodule E2bEx.Commands do
 
   defp apply_messages(state, messages) do
     Enum.reduce_while(messages, {:ok, state}, fn message, {:ok, state} ->
-      case apply_event(state, message["event"]) do
-        {:ok, state} -> {:cont, {:ok, state}}
-        {:error, _} = error -> {:halt, error}
+      case Fold.apply_event(state.fold, message["event"]) do
+        {:ok, fold, outputs} ->
+          Enum.each(outputs, fn
+            {:stdout, bytes} -> invoke(state.on_stdout, bytes)
+            {:stderr, bytes} -> invoke(state.on_stderr, bytes)
+          end)
+
+          {:cont, {:ok, %{state | fold: fold}}}
+
+        {:error, _} = error ->
+          {:halt, error}
       end
     end)
   end
-
-  defp apply_event(state, %{"data" => %{"stdout" => chunk}}) do
-    with {:ok, bytes} <- decode_chunk(chunk) do
-      invoke(state.on_stdout, bytes)
-      {:ok, %{state | result: %{state.result | stdout: state.result.stdout <> bytes}}}
-    end
-  end
-
-  defp apply_event(state, %{"data" => %{"stderr" => chunk}}) do
-    with {:ok, bytes} <- decode_chunk(chunk) do
-      invoke(state.on_stderr, bytes)
-      {:ok, %{state | result: %{state.result | stderr: state.result.stderr <> bytes}}}
-    end
-  end
-
-  defp apply_event(state, %{"end" => end_event}) do
-    result = %{
-      state.result
-      | exit_code: Map.get(end_event, "exitCode", 0),
-        error: Map.get(end_event, "error")
-    }
-
-    {:ok, %{state | result: result}}
-  end
-
-  defp apply_event(state, _other), do: {:ok, state}
 
   defp invoke(nil, _chunk), do: :ok
 
@@ -195,37 +189,14 @@ defmodule E2bEx.Commands do
         {:error, %Error{message: "malformed envd response", reason: :malformed_frame, body: resp.body}}
 
       true ->
-        case trailer_error(state.trailer) do
+        case Connect.trailer_error(state.trailer) do
           %Error{} = error -> {:error, error}
-          nil -> {:ok, state.result}
+          nil -> {:ok, Fold.result(state.fold)}
         end
     end
   end
 
-  defp trailer_error(%{"error" => %{} = err}) do
-    %Error{message: err["message"], reason: err["code"], body: err}
-  end
-
-  defp trailer_error(_), do: nil
-
-  defp decode_chunk(chunk) do
-    case Base.decode64(chunk) do
-      {:ok, bytes} -> {:ok, bytes}
-      :error -> {:error, :invalid_base64}
-    end
-  end
-
   # ---- request building ----
-
-  defp fetch_sandbox_id(%Sandbox{sandbox_id: id}) when is_binary(id) and id != "", do: {:ok, id}
-  defp fetch_sandbox_id(_), do: {:error, %Error{message: "sandbox is missing :sandbox_id"}}
-
-  defp domain_from(%Client{base_url: base_url}) do
-    case URI.parse(base_url) do
-      %URI{host: host} when is_binary(host) -> String.replace_prefix(host, "api.", "")
-      _ -> @default_domain
-    end
-  end
 
   defp start_request(command, opts) do
     process =
@@ -233,20 +204,7 @@ defmodule E2bEx.Commands do
       |> put_present(:cwd, opts[:cwd])
       |> put_present(:envs, opts[:envs])
 
-    %{process: process, stdin: false}
-  end
-
-  defp headers(sandbox, sandbox_id, port, timeout_ms, opts) do
-    %{
-      "content-type" => "application/connect+json",
-      "connect-protocol-version" => "1",
-      "e2b-sandbox-id" => sandbox_id,
-      "e2b-sandbox-port" => Integer.to_string(port),
-      "keepalive-ping-interval" => "50"
-    }
-    |> put_when(sandbox.envd_access_token, "x-access-token", sandbox.envd_access_token)
-    |> put_when(timeout_ms != 0, "connect-timeout-ms", Integer.to_string(timeout_ms))
-    |> put_when(opts[:user], "authorization", "Basic " <> Base.encode64("#{opts[:user]}:"))
+    %{process: process, stdin: opts[:stdin] || false}
   end
 
   defp with_timeout(req, 0), do: Req.merge(req, receive_timeout: :infinity)
@@ -255,7 +213,97 @@ defmodule E2bEx.Commands do
   defp put_present(map, _key, nil), do: map
   defp put_present(map, key, value), do: Map.put(map, key, value)
 
-  defp put_when(map, nil, _key, _value), do: map
-  defp put_when(map, false, _key, _value), do: map
-  defp put_when(map, _truthy, key, value), do: Map.put(map, key, value)
+  @doc """
+  Start `command` in `sandbox` in the background and return a `CommandHandle`.
+
+  Output is streamed to the subscriber (`opts[:subscriber]`, default the calling
+  process) as `{handle.ref, {:stdout|:stderr, binary}}` messages, ending with a
+  terminal `{handle.ref, {:exit, %E2bEx.CommandResult{}}}` (any exit code) or
+  `{handle.ref, {:error, %E2bEx.Error{}}}`. Use the message stream or
+  `E2bEx.CommandHandle.wait/1`.
+
+  ## Options
+    * `:subscriber` — pid to receive output messages (default the caller).
+    * `:stdin` — open stdin so `send_stdin/2` works (default `false`).
+    * `:cwd`, `:envs`, `:user`, `:timeout_ms`, `:domain`, `:port`, `:base_url` —
+      as for `run/4`.
+  """
+  @spec start(Client.t(), Sandbox.t(), String.t(), keyword()) ::
+          {:ok, CommandHandle.t()} | {:error, Error.t()}
+  def start(%Client{} = client, %Sandbox{} = sandbox, command, opts \\ []) when is_binary(command) do
+    with {:ok, ctx} <- Rpc.context(client, sandbox, opts) do
+      spawn_handle(ctx, @start_path, start_request(command, opts), opts)
+    end
+  end
+
+  defp spawn_handle(ctx, path, request, opts) do
+    ref = make_ref()
+    subscriber = opts[:subscriber] || self()
+
+    arg = %{
+      ctx: ctx,
+      path: path,
+      request: request,
+      subscriber: subscriber,
+      ref: ref,
+      timeout_ms: ctx.timeout_ms
+    }
+
+    with {:ok, server} <- HandleServer.start(arg) do
+      await = if ctx.timeout_ms == 0, do: :infinity, else: ctx.timeout_ms
+
+      try do
+        case GenServer.call(server, :await_start, await) do
+          {:ok, pid} -> {:ok, %CommandHandle{server: server, ref: ref, pid: pid, context: ctx}}
+          {:error, error} -> {:error, error}
+        end
+      catch
+        :exit, _ -> {:error, %Error{message: "command failed to start"}}
+      end
+    end
+  end
+
+  @doc """
+  Reconnect to a running command by `pid` and return a `CommandHandle` that streams
+  its output (`/process.Process/Connect`). Options: `:subscriber`, `:timeout_ms`,
+  `:domain`, `:port`, `:base_url`.
+  """
+  @spec connect(Client.t(), Sandbox.t(), non_neg_integer(), keyword()) ::
+          {:ok, CommandHandle.t()} | {:error, Error.t()}
+  def connect(%Client{} = client, %Sandbox{} = sandbox, pid, opts \\ []) when is_integer(pid) do
+    with {:ok, ctx} <- Rpc.context(client, sandbox, opts) do
+      spawn_handle(ctx, @connect_path, %{process: %{pid: pid}}, opts)
+    end
+  end
+
+  @doc "List running commands/PTYs in `sandbox` (`/process.Process/List`)."
+  @spec list(Client.t(), Sandbox.t(), keyword()) :: {:ok, [ProcessInfo.t()]} | {:error, Error.t()}
+  def list(%Client{} = client, %Sandbox{} = sandbox, opts \\ []) do
+    with {:ok, ctx} <- Rpc.context(client, sandbox, opts),
+         {:ok, procs} <- Rpc.list(ctx) do
+      {:ok, Enum.map(procs, &ProcessInfo.from_api/1)}
+    end
+  end
+
+  @doc "Kill a process by pid (SIGKILL). `{:ok, false}` if it was already gone."
+  @spec kill(Client.t(), Sandbox.t(), non_neg_integer(), keyword()) ::
+          {:ok, boolean()} | {:error, Error.t()}
+  def kill(%Client{} = client, %Sandbox{} = sandbox, pid, opts \\ []) when is_integer(pid) do
+    with {:ok, ctx} <- Rpc.context(client, sandbox, opts), do: Rpc.kill(ctx, pid)
+  end
+
+  @doc "Send `data` to a process's stdin by pid (requires the process was started with `stdin: true`)."
+  @spec send_stdin(Client.t(), Sandbox.t(), non_neg_integer(), binary(), keyword()) ::
+          :ok | {:error, Error.t()}
+  def send_stdin(%Client{} = client, %Sandbox{} = sandbox, pid, data, opts \\ [])
+      when is_integer(pid) and is_binary(data) do
+    with {:ok, ctx} <- Rpc.context(client, sandbox, opts), do: Rpc.send_stdin(ctx, pid, data)
+  end
+
+  @doc "Close a process's stdin (EOF) by pid."
+  @spec close_stdin(Client.t(), Sandbox.t(), non_neg_integer(), keyword()) ::
+          :ok | {:error, Error.t()}
+  def close_stdin(%Client{} = client, %Sandbox{} = sandbox, pid, opts \\ []) when is_integer(pid) do
+    with {:ok, ctx} <- Rpc.context(client, sandbox, opts), do: Rpc.close_stdin(ctx, pid)
+  end
 end
