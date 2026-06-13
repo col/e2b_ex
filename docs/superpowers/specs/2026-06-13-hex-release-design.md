@@ -52,8 +52,7 @@ def project do
 end
 
 defp description do
-  "An Elixir client for the E2B sandbox platform — Sandboxes, Templates, " <>
-    "Tags, Volumes, and running commands inside a sandbox. Built on Req."
+  "An Elixir client for the E2B sandbox platform"
 end
 
 defp package do
