@@ -10,9 +10,13 @@ defmodule E2bEx.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       name: "E2bEx",
+      description: description(),
+      package: package(),
+      source_url: "https://github.com/col/e2b_ex",
       docs: [
         main: "E2bEx",
-        extras: ["README.md"]
+        extras: ["README.md"],
+        source_ref: "v0.1.0"
       ]
     ]
   end
@@ -23,6 +27,18 @@ defmodule E2bEx.MixProject do
   def application do
     [
       extra_applications: [:logger]
+    ]
+  end
+
+  defp description do
+    "An Elixir client for the E2B sandbox platform"
+  end
+
+  defp package do
+    [
+      licenses: ["MIT"],
+      links: %{"GitHub" => "https://github.com/col/e2b_ex"},
+      maintainers: ["Colin Harris"]
     ]
   end
 
