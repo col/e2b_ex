@@ -117,6 +117,9 @@ defmodule E2bEx.Sandboxes do
 
   `params` is a map matching the OpenAPI `NewSandbox` schema, e.g.
   `%{templateID: "tmpl_1", timeout: 30, metadata: %{user: "abc"}}`.
+
+  Mount team volumes (see `E2bEx.Volumes`) with `volumeMounts`:
+  `%{templateID: "tmpl_1", volumeMounts: [%{name: "my-vol", path: "/data"}]}`.
   """
   @spec create(E2bEx.Client.t(), map()) :: {:ok, Sandbox.t()} | {:error, E2bEx.Error.t()}
   def create(client, params) when is_map(params) do
