@@ -100,8 +100,8 @@ Control a running command:
 :ok            = E2bEx.CommandHandle.disconnect(h)             # stop streaming, keep running
 ```
 
-PTY (interactive terminals) and Filesystem (read/write/list/watch files) support
-are planned for later releases.
+PTY (interactive terminals) and filesystem watching (live file events) are
+planned for later releases.
 
 ## Volumes
 
@@ -118,6 +118,24 @@ Create and manage persistent team volumes, and mount them into sandboxes:
   E2bEx.Sandboxes.create(client, %{templateID: "base",
     volumeMounts: [%{name: "my-vol", path: "/data"}]})
 ```
+
+## Filesystem
+
+Read, write, and manage files inside a sandbox (via the sandbox's `envd`
+daemon — the sandbox must carry an `:envd_access_token`, as for commands):
+
+```elixir
+{:ok, _entry}     = E2bEx.Filesystem.write(client, sandbox, "/tmp/hello.txt", "hi there")
+{:ok, "hi there"} = E2bEx.Filesystem.read(client, sandbox, "/tmp/hello.txt")
+{:ok, entries}    = E2bEx.Filesystem.list(client, sandbox, "/tmp")   # [%E2bEx.EntryInfo{}]
+{:ok, info}       = E2bEx.Filesystem.get_info(client, sandbox, "/tmp/hello.txt")
+{:ok, true}       = E2bEx.Filesystem.exists(client, sandbox, "/tmp/hello.txt")
+{:ok, true}       = E2bEx.Filesystem.make_dir(client, sandbox, "/tmp/sub")
+{:ok, _entry}     = E2bEx.Filesystem.rename(client, sandbox, "/tmp/hello.txt", "/tmp/bye.txt")
+:ok               = E2bEx.Filesystem.remove(client, sandbox, "/tmp/bye.txt")
+```
+
+Watching for live filesystem changes is planned for a later release.
 
 Configuration can also come from application config:
 
