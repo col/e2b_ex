@@ -99,6 +99,22 @@ Control a running command:
 
 PTY support is planned for a later phase.
 
+## Volumes
+
+Create and manage persistent team volumes, and mount them into sandboxes:
+
+```elixir
+{:ok, vol}  = E2bEx.Volumes.create(client, "my-vol")   # %E2bEx.Volume{volume_id, name, token}
+{:ok, vols} = E2bEx.Volumes.list(client)
+{:ok, vol}  = E2bEx.Volumes.get(client, vol.volume_id)
+:ok         = E2bEx.Volumes.delete(client, vol.volume_id)
+
+# Mount a volume when creating a sandbox:
+{:ok, sandbox} =
+  E2bEx.Sandboxes.create(client, %{templateID: "base",
+    volumeMounts: [%{name: "my-vol", path: "/data"}]})
+```
+
 Configuration can also come from application config:
 
 ```elixir
