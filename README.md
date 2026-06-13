@@ -1,7 +1,11 @@
 # E2bEx
 
+[![Hex.pm](https://img.shields.io/hexpm/v/e2b_ex.svg)](https://hex.pm/packages/e2b_ex)
+[![Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/e2b_ex)
+
 An Elixir client for the [E2B](https://e2b.dev) API, covering Sandboxes,
-Templates, and Tags. Built on [`Req`](https://hex.pm/packages/req).
+Templates, Tags, Volumes, and running commands inside a sandbox. Built on
+[`Req`](https://hex.pm/packages/req).
 
 ## Installation
 
@@ -68,8 +72,7 @@ runs. `run/4` still blocks and returns the fully accumulated
 result.stdout # => "1\n2\n3\n"
 ```
 
-Background execution and reconnecting are available via `start/4`/`connect/4`;
-PTY is planned for a later phase.
+Background execution and reconnecting are available via `start/4`/`connect/4`.
 
 ### Background commands
 
@@ -97,7 +100,8 @@ Control a running command:
 :ok            = E2bEx.CommandHandle.disconnect(h)             # stop streaming, keep running
 ```
 
-PTY support is planned for a later phase.
+PTY (interactive terminals) and Filesystem (read/write/list/watch files) support
+are planned for later releases.
 
 ## Volumes
 
