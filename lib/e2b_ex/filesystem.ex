@@ -14,12 +14,14 @@ defmodule E2bEx.Filesystem do
 
   alias E2bEx.{Client, EntryInfo, Error, Sandbox}
   alias E2bEx.Envd.Rpc
+  alias E2bEx.Filesystem.{WatchHandle, WatchServer}
 
   @stat_path "/filesystem.Filesystem/Stat"
   @list_path "/filesystem.Filesystem/ListDir"
   @make_dir_path "/filesystem.Filesystem/MakeDir"
   @move_path "/filesystem.Filesystem/Move"
   @remove_path "/filesystem.Filesystem/Remove"
+  @watch_path "/filesystem.Filesystem/WatchDir"
 
   @doc "List a directory's entries (`ListDir`). `:depth` defaults to 1."
   @spec list(Client.t(), Sandbox.t(), String.t(), keyword()) ::
@@ -117,6 +119,63 @@ defmodule E2bEx.Filesystem do
     with {:ok, ctx} <- Rpc.context(client, sandbox, opts),
          {:ok, infos} <- Rpc.put_file(ctx, path, data, opts) do
       {:ok, write_info(infos)}
+    end
+  end
+
+  @doc """
+  Watch a directory for changes (`WatchDir`), returning a `%E2bEx.Filesystem.WatchHandle{}`.
+
+  Change events are pushed to the subscriber (`opts[:subscriber]`, default the
+  caller) as `{handle.ref, {:fs_event, %E2bEx.FilesystemEvent{}}}`, ending with a
+  terminal `{handle.ref, {:error, %E2bEx.Error{}}}` if the stream fails or closes.
+  Call `E2bEx.Filesystem.WatchHandle.stop/1` to end the watch.
+
+  ## Options
+    * `:recursive` — watch subdirectories too (default `false`).
+    * `:include_entry` — include the `%EntryInfo{}` of the affected entry in each
+      event when available (default `false`).
+    * `:subscriber` — pid to receive event messages (default the caller).
+    * `:user`, `:timeout_ms`, `:domain`, `:port`, `:base_url` — as for the other
+      `E2bEx.Filesystem` functions.
+  """
+  @spec watch_dir(Client.t(), Sandbox.t(), String.t(), keyword()) ::
+          {:ok, WatchHandle.t()} | {:error, Error.t()}
+  def watch_dir(%Client{} = client, %Sandbox{} = sandbox, path, opts \\ []) when is_binary(path) do
+    with {:ok, ctx} <- Rpc.context(client, sandbox, opts) do
+      request = %{
+        path: path,
+        recursive: opts[:recursive] || false,
+        includeEntry: opts[:include_entry] || false
+      }
+
+      spawn_watch(ctx, request, opts)
+    end
+  end
+
+  defp spawn_watch(ctx, request, opts) do
+    ref = make_ref()
+    subscriber = opts[:subscriber] || self()
+
+    arg = %{
+      ctx: ctx,
+      path: @watch_path,
+      request: request,
+      subscriber: subscriber,
+      ref: ref,
+      timeout_ms: ctx.timeout_ms
+    }
+
+    with {:ok, server} <- WatchServer.start(arg) do
+      await = if ctx.timeout_ms == 0, do: :infinity, else: ctx.timeout_ms
+
+      try do
+        case GenServer.call(server, :await_start, await) do
+          :ok -> {:ok, %WatchHandle{server: server, ref: ref}}
+          {:error, error} -> {:error, error}
+        end
+      catch
+        :exit, _ -> {:error, %Error{message: "watch failed to start"}}
+      end
     end
   end
 
