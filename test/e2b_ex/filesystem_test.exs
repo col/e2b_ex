@@ -132,4 +132,44 @@ defmodule E2bEx.FilesystemTest do
 
     assert {:error, %Error{status: 500}} = Filesystem.get_info(client(), sandbox(), "/x", base_url: base_url)
   end
+
+  test "read/4 returns the file content as a binary", %{bypass: bypass, base_url: base_url} do
+    Bypass.expect_once(bypass, "GET", "/files", fn conn ->
+      conn = Plug.Conn.fetch_query_params(conn)
+      assert conn.query_params["path"] == "/tmp/a.txt"
+      Plug.Conn.resp(conn, 200, "file contents")
+    end)
+
+    assert {:ok, "file contents"} = Filesystem.read(client(), sandbox(), "/tmp/a.txt", base_url: base_url)
+  end
+
+  test "write/5 uploads octet-stream and returns the written EntryInfo",
+       %{bypass: bypass, base_url: base_url} do
+    Bypass.expect_once(bypass, "POST", "/files", fn conn ->
+      conn = Plug.Conn.fetch_query_params(conn)
+      assert conn.query_params["path"] == "/tmp/a.txt"
+      assert Plug.Conn.get_req_header(conn, "content-type") == ["application/octet-stream"]
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      assert raw == "hello"
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(200, ~s([{"name":"a.txt","type":"FILE_TYPE_FILE","path":"/tmp/a.txt"}]))
+    end)
+
+    assert {:ok, %EntryInfo{name: "a.txt", type: :file, path: "/tmp/a.txt"}} =
+             Filesystem.write(client(), sandbox(), "/tmp/a.txt", "hello", base_url: base_url)
+  end
+
+  test "write/5 returns an empty EntryInfo when envd returns no WriteInfo",
+       %{bypass: bypass, base_url: base_url} do
+    Bypass.expect_once(bypass, "POST", "/files", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(200, "[]")
+    end)
+
+    assert {:ok, %EntryInfo{name: nil, path: nil}} =
+             Filesystem.write(client(), sandbox(), "/tmp/a.txt", "hello", base_url: base_url)
+  end
 end

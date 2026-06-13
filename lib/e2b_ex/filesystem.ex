@@ -90,4 +90,30 @@ defmodule E2bEx.Filesystem do
       end
     end
   end
+
+  @doc "Read a file's content (`GET /files`). Returns the raw bytes; `\"\"` for an empty file."
+  @spec read(Client.t(), Sandbox.t(), String.t(), keyword()) ::
+          {:ok, binary()} | {:error, Error.t()}
+  def read(%Client{} = client, %Sandbox{} = sandbox, path, opts \\ []) when is_binary(path) do
+    with {:ok, ctx} <- Rpc.context(client, sandbox, opts) do
+      Rpc.get_file(ctx, path, opts)
+    end
+  end
+
+  @doc """
+  Write `data` (a binary) to a file (`POST /files`), overwriting if it exists.
+  Returns the written entry.
+  """
+  @spec write(Client.t(), Sandbox.t(), String.t(), binary(), keyword()) ::
+          {:ok, EntryInfo.t()} | {:error, Error.t()}
+  def write(%Client{} = client, %Sandbox{} = sandbox, path, data, opts \\ [])
+      when is_binary(path) and is_binary(data) do
+    with {:ok, ctx} <- Rpc.context(client, sandbox, opts),
+         {:ok, infos} <- Rpc.put_file(ctx, path, data, opts) do
+      {:ok, write_info(infos)}
+    end
+  end
+
+  defp write_info([entry | _]) when is_map(entry), do: EntryInfo.from_api(entry)
+  defp write_info(_), do: %EntryInfo{}
 end
