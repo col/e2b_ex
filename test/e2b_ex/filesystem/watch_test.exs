@@ -108,6 +108,21 @@ defmodule E2bEx.Filesystem.WatchTest do
     assert_receive {^ref, {:error, %Error{message: "gone", reason: "unavailable"}}}
   end
 
+  test "a truncated frame after the start event sends a terminal malformed error",
+       %{bypass: bypass, base_url: base_url} do
+    Bypass.expect_once(bypass, "POST", "/filesystem.Filesystem/WatchDir", fn conn ->
+      # A frame header claiming 50 bytes but only "short" (5) follow: the start
+      # frame is delivered (so the watch is active), then the partial frame is left
+      # in the decoder buffer and the stream closes -> malformed.
+      truncated = <<0::8, 50::unsigned-big-32, "short"::binary>>
+      Plug.Conn.resp(conn, 200, frame(%{"start" => %{}}) <> truncated)
+    end)
+
+    {:ok, handle} = Filesystem.watch_dir(client(), sandbox(), "/d", base_url: base_url)
+    ref = handle.ref
+    assert_receive {^ref, {:error, %Error{message: "malformed envd response"}}}
+  end
+
   test "stop/1 ends the watch and sends no terminal message", %{bypass: bypass, base_url: base_url} do
     Bypass.expect(bypass, "POST", "/filesystem.Filesystem/WatchDir", fn conn ->
       # Stream only a start event, then keepalives, so the watch stays open. Trap
