@@ -109,6 +109,72 @@ defmodule E2bEx.Envd.Rpc do
     end
   end
 
+  @doc "Download file content over HTTP (`GET /files`). Returns the raw body bytes."
+  @spec get_file(ctx(), String.t(), keyword()) :: {:ok, binary()} | {:error, Error.t()}
+  def get_file(ctx, path, opts \\ []) when is_binary(path) do
+    req =
+      Req.new(
+        method: :get,
+        base_url: ctx.base_url,
+        url: "/files",
+        headers: file_headers(ctx),
+        params: file_params(path, opts),
+        decode_body: false,
+        retry: false
+      )
+      |> Req.merge(ctx.req_options)
+
+    case Req.request(req) do
+      {:ok, %Req.Response{status: status, body: body}} when status in 200..299 -> {:ok, body || ""}
+      {:ok, %Req.Response{} = resp} -> {:error, Error.from_response(resp)}
+      {:error, exception} -> {:error, Error.from_exception(exception)}
+    end
+  end
+
+  @doc "Upload file content over HTTP (`POST /files`, octet-stream). Returns the WriteInfo list."
+  @spec put_file(ctx(), String.t(), binary(), keyword()) :: {:ok, [map()]} | {:error, Error.t()}
+  def put_file(ctx, path, data, opts \\ []) when is_binary(path) and is_binary(data) do
+    req =
+      Req.new(
+        method: :post,
+        base_url: ctx.base_url,
+        url: "/files",
+        headers: Map.put(file_headers(ctx), "content-type", "application/octet-stream"),
+        params: file_params(path, opts),
+        body: data,
+        retry: false
+      )
+      |> Req.merge(ctx.req_options)
+
+    case Req.request(req) do
+      {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
+        {:ok, normalize_write(body)}
+
+      {:ok, %Req.Response{} = resp} ->
+        {:error, Error.from_response(resp)}
+
+      {:error, exception} ->
+        {:error, Error.from_exception(exception)}
+    end
+  end
+
+  defp file_headers(ctx) do
+    ctx.headers
+    |> Map.delete("content-type")
+    |> Map.delete("keepalive-ping-interval")
+    |> Map.delete("connect-timeout-ms")
+  end
+
+  defp file_params(path, opts) do
+    case opts[:user] do
+      nil -> [path: path]
+      user -> [path: path, username: user]
+    end
+  end
+
+  defp normalize_write(body) when is_list(body), do: body
+  defp normalize_write(_), do: []
+
   defp fetch_sandbox_id(%Sandbox{sandbox_id: id}) when is_binary(id) and id != "", do: {:ok, id}
   defp fetch_sandbox_id(_), do: {:error, %Error{message: "sandbox is missing :sandbox_id"}}
 
