@@ -38,6 +38,9 @@ defmodule E2bEx.Filesystem do
     with {:ok, ctx} <- Rpc.context(client, sandbox, opts),
          {:ok, %{"entry" => entry}} <- Rpc.unary(ctx, @stat_path, %{path: path}) do
       {:ok, EntryInfo.from_api(entry)}
+    else
+      {:ok, _} -> {:error, %Error{message: "envd Stat response missing entry"}}
+      {:error, _} = error -> error
     end
   end
 
@@ -77,6 +80,9 @@ defmodule E2bEx.Filesystem do
          {:ok, %{"entry" => entry}} <-
            Rpc.unary(ctx, @move_path, %{source: old_path, destination: new_path}) do
       {:ok, EntryInfo.from_api(entry)}
+    else
+      {:ok, _} -> {:error, %Error{message: "envd Move response missing entry"}}
+      {:error, _} = error -> error
     end
   end
 

@@ -143,6 +143,26 @@ defmodule E2bEx.FilesystemTest do
     assert {:ok, "file contents"} = Filesystem.read(client(), sandbox(), "/tmp/a.txt", base_url: base_url)
   end
 
+  test "read/4 forwards :user as the username query param", %{bypass: bypass, base_url: base_url} do
+    Bypass.expect_once(bypass, "GET", "/files", fn conn ->
+      conn = Plug.Conn.fetch_query_params(conn)
+      assert conn.query_params["path"] == "/tmp/a.txt"
+      assert conn.query_params["username"] == "root"
+      Plug.Conn.resp(conn, 200, "ok")
+    end)
+
+    assert {:ok, "ok"} = Filesystem.read(client(), sandbox(), "/tmp/a.txt", user: "root", base_url: base_url)
+  end
+
+  test "get_info/4 errors when envd returns a 2xx with no entry", %{bypass: bypass, base_url: base_url} do
+    Bypass.expect_once(bypass, "POST", "/filesystem.Filesystem/Stat", fn conn ->
+      respond_json(conn, 200, %{})
+    end)
+
+    assert {:error, %Error{message: "envd Stat response missing entry"}} =
+             Filesystem.get_info(client(), sandbox(), "/x", base_url: base_url)
+  end
+
   test "write/5 uploads octet-stream and returns the written EntryInfo",
        %{bypass: bypass, base_url: base_url} do
     Bypass.expect_once(bypass, "POST", "/files", fn conn ->

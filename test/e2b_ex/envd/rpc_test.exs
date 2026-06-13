@@ -195,5 +195,15 @@ defmodule E2bEx.Envd.RpcTest do
       assert {:ok, [%{"name" => "a.txt", "path" => "/tmp/a.txt"}]} =
                Rpc.put_file(ctx, "/tmp/a.txt", "payload")
     end
+
+    test "put_file/4 maps a non-2xx to {:error, %Error{}}", %{bypass: bypass, ctx: ctx} do
+      Bypass.expect_once(bypass, "POST", "/files", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(403, ~s({"code":"permission_denied","message":"nope"}))
+      end)
+
+      assert {:error, %Error{status: 403}} = Rpc.put_file(ctx, "/tmp/a.txt", "payload")
+    end
   end
 end
