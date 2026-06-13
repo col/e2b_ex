@@ -135,7 +135,18 @@ daemon — the sandbox must carry an `:envd_access_token`, as for commands):
 :ok               = E2bEx.Filesystem.remove(client, sandbox, "/tmp/bye.txt")
 ```
 
-Watching for live filesystem changes is planned for a later release.
+Watch a directory for live changes; events are pushed to your process:
+
+```elixir
+{:ok, watch} = E2bEx.Filesystem.watch_dir(client, sandbox, "/app", recursive: true)
+
+receive do
+  {ref, {:fs_event, %E2bEx.FilesystemEvent{type: type, name: name}}} when ref == watch.ref ->
+    IO.puts("#{type}: #{name}")
+end
+
+:ok = E2bEx.Filesystem.WatchHandle.stop(watch)
+```
 
 Configuration can also come from application config:
 
