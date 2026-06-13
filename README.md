@@ -57,6 +57,16 @@ result.stdout     # "..."
 `exit_code` for success); `{:error, %E2bEx.Error{}}` signals it could not be run.
 Options: `:on_stdout`, `:on_stderr`, `:cwd`, `:envs`, `:user`, `:timeout_ms`.
 
+The command string is run with `/bin/bash -l -c`, so it's interpreted by the
+shell. To build a command from separate arguments without worrying about quoting,
+wrap them with `E2bEx.Commands.join/1`:
+
+```elixir
+{:ok, _} =
+  E2bEx.Commands.run(client, sandbox,
+    E2bEx.Commands.join(["grep", "-rn", "TODO: fix", "/src"]))
+```
+
 ### Streaming output
 
 Pass `:on_stdout` / `:on_stderr` to receive output incrementally as the command

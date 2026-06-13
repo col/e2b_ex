@@ -108,6 +108,32 @@ defmodule E2bEx.Commands do
     end
   end
 
+  @doc ~S"""
+  Shell-quote an argv list into one command string for `run/4`/`start/4`.
+
+  Commands run via `/bin/bash -l -c "<string>"`, so the string is interpreted by
+  the shell. `join/1` quotes each argument so spaces and shell metacharacters
+  (`$`, `*`, `|`, quotes, …) are passed through literally — the equivalent of
+  Python's `shlex.join`. For example, `join(["echo", "hello world"])` produces the
+  command `echo 'hello world'`.
+
+  Arguments made up only of safe characters (`A-Za-z0-9_@%+=:,./-`) are left
+  unquoted; everything else is single-quoted, with embedded single quotes escaped
+  (`'` becomes `'\''`).
+  """
+  @spec join([String.t()]) :: String.t()
+  def join(args) when is_list(args), do: Enum.map_join(args, " ", &quote_arg/1)
+
+  defp quote_arg(arg) when is_binary(arg) do
+    cond do
+      arg == "" -> "''"
+      safe_arg?(arg) -> arg
+      true -> "'" <> String.replace(arg, "'", "'\\''") <> "'"
+    end
+  end
+
+  defp safe_arg?(arg), do: String.match?(arg, ~r{\A[A-Za-z0-9_@%+=:,./-]+\z})
+
   # ---- streaming collection ----
 
   # Req `into:` reducer. Accumulates raw bytes onto `resp.body` (so non-2xx error
