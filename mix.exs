@@ -16,7 +16,7 @@ defmodule E2bEx.MixProject do
       docs: [
         main: "E2bEx",
         extras: ["README.md"],
-        source_ref: "v0.1.0"
+        source_ref: "v0.2.0"
       ]
     ]
   end
