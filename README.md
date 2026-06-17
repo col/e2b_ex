@@ -129,6 +129,34 @@ Create and manage persistent team volumes, and mount them into sandboxes:
     volumeMounts: [%{name: "my-vol", path: "/data"}]})
 ```
 
+## Webhooks
+
+Register webhooks for sandbox lifecycle events, then verify and decode deliveries:
+
+```elixir
+{:ok, wh} =
+  E2bEx.Webhooks.create(client, %{
+    name: "my-hook",
+    url: "https://example.com/hook",
+    enabled: true,
+    events: ["sandbox.lifecycle.created", "sandbox.lifecycle.killed"],
+    signatureSecret: "whsec_..."
+  })
+
+{:ok, hooks} = E2bEx.Webhooks.list(client)
+{:ok, wh}    = E2bEx.Webhooks.get(client, wh.id)
+{:ok, wh}    = E2bEx.Webhooks.update(client, wh.id, %{enabled: false})
+:ok          = E2bEx.Webhooks.delete(client, wh.id)
+
+# In your webhook endpoint, verify + decode a delivery from the raw body and the
+# "e2b-signature" header:
+case E2bEx.WebhookEvent.parse(raw_body, signature, "whsec_...") do
+  {:ok, %E2bEx.WebhookEvent{type: type, sandbox_id: id}} -> handle(type, id)
+  {:error, :invalid_signature} -> :unauthorized
+  {:error, :invalid_payload} -> :bad_request
+end
+```
+
 Configuration can also come from application config:
 
 ```elixir
