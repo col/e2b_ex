@@ -63,4 +63,53 @@ defmodule E2bEx.WebhookEvent do
       sandbox_team_id: m["sandbox_team_id"]
     }
   end
+
+  @doc """
+  Verify a delivery's `e2b-signature` header against the raw request body.
+
+  Computes `base64(sha256(secret <> raw_body))` with trailing `=` stripped (plain
+  SHA256, not HMAC — per the E2B docs) and compares it to `signature` in constant time.
+  The raw body must be the exact bytes received; re-encoding a parsed map would change
+  them and fail verification.
+  """
+  @spec verify_signature(binary(), binary(), binary()) :: boolean()
+  def verify_signature(raw_body, signature, secret)
+      when is_binary(raw_body) and is_binary(signature) and is_binary(secret) do
+    expected =
+      :crypto.hash(:sha256, secret <> raw_body)
+      |> Base.encode64()
+      |> String.trim_trailing("=")
+
+    secure_compare(expected, signature)
+  end
+
+  @doc """
+  Verify and decode a delivery in one step.
+
+  Returns `{:ok, %E2bEx.WebhookEvent{}}` when the signature is valid and the body is
+  JSON, `{:error, :invalid_signature}` when the signature does not match, or
+  `{:error, :invalid_payload}` when the body is not valid JSON. These atom reasons are
+  intentional: signature/JSON checks are local, not HTTP failures, so they do not use
+  `%E2bEx.Error{}`.
+  """
+  @spec parse(binary(), binary(), binary()) ::
+          {:ok, t()} | {:error, :invalid_signature | :invalid_payload}
+  def parse(raw_body, signature, secret) do
+    if verify_signature(raw_body, signature, secret) do
+      case Jason.decode(raw_body) do
+        {:ok, map} -> {:ok, from_api(map)}
+        {:error, _} -> {:error, :invalid_payload}
+      end
+    else
+      {:error, :invalid_signature}
+    end
+  end
+
+  # Constant-time comparison. Byte-wise XOR fold avoids depending on
+  # `:crypto.hash_equals/2` (OTP 25+).
+  defp secure_compare(a, b) when byte_size(a) == byte_size(b) do
+    :crypto.exor(a, b) == :binary.copy(<<0>>, byte_size(a))
+  end
+
+  defp secure_compare(_, _), do: false
 end
