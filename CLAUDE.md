@@ -5,8 +5,7 @@ An Elixir API client for the [E2B](https://e2b.dev) sandbox platform, built on t
 
 ## Scope
 
-Deliberately scoped to **Sandboxes, Templates, and Tags**, plus **running commands
-inside a sandbox**. Intentionally **excluded**: Teams, Filesystem, Volumes, and any
+Deliberately scoped to **Sandboxes, Templates, Tags, Volumes, and Webhooks**, plus **running commands inside a sandbox** and **inbound lifecycle-event webhooks** (verify + decode). Intentionally **excluded**: Teams, Filesystem, and any
 API marked deprecated in the OpenAPI spec. (The envd Process API is in scope only via
 `E2bEx.Commands` — see below.)
 
@@ -67,6 +66,12 @@ The library talks to **two different hosts**, and this distinction matters:
 - `e2b_ex/envd/connect/decoder.ex` — `E2bEx.Envd.Connect.Decoder`: pure **incremental**
   frame decoder (`new/0`, `push/2`) that buffers partial frames across network chunks.
   `decode_frames/1` is implemented on top of it.
+- `e2b_ex/webhook.ex`, `e2b_ex/webhooks.ex` — `E2bEx.Webhook` struct and the
+  `E2bEx.Webhooks` CRUD resource over `/events/webhooks` (list/create/get/update/delete).
+- `e2b_ex/webhook_event.ex` — `E2bEx.WebhookEvent`: inbound delivery. `from_api/1`
+  decodes the **snake_case** payload directly; `verify_signature/3` (plain SHA256 of
+  `secret <> raw_body`, base64, trailing `=` stripped, constant-time compared);
+  `parse/3` (verify + decode → `{:ok, event} | {:error, :invalid_signature | :invalid_payload}`).
 
 ## Conventions
 
@@ -88,6 +93,9 @@ The library talks to **two different hosts**, and this distinction matters:
   preserved) but `{:error, "command ended without a result"}` for `wait/1`.
 - Each `lib` file has one focused responsibility; tests mirror the structure under
   `test/e2b_ex/`.
+- **Inbound webhook errors are atoms, not `%E2bEx.Error{}`.** `WebhookEvent.parse/3`
+  returns `{:error, :invalid_signature | :invalid_payload}` — signature/JSON checks
+  are local, not HTTP failures. (Deliberate divergence, like `Commands`.)
 
 ## Connect protocol notes (envd command execution)
 
@@ -166,6 +174,10 @@ The library talks to **two different hosts**, and this distinction matters:
 - **`Error.code` is a string for envd Connect errors** (`"not_found"`, `"unavailable"`)
   but an integer for central-API errors (`404`). `@type code :: integer() | String.t() | nil`.
   `Rpc.kill/2` pattern-matches `%Error{code: "not_found"}`.
+- **Webhook endpoints are not in `openapi.yml`.** `/events/webhooks` is absent from
+  both this repo's spec and upstream E2B's. Source of truth is the docs page:
+  https://e2b.dev/docs/sandbox/lifecycle-events-webhooks. Don't expect a spec regen to
+  surface them.
 
 ## Development workflow
 
