@@ -14,6 +14,8 @@ defmodule E2bEx.WebhookTest do
       "signatureSecret" => "whsec_should_be_ignored"
     }
 
+    wh = Webhook.from_api(api)
+
     assert %Webhook{
              id: "wh_1",
              team_id: "team_1",
@@ -22,8 +24,8 @@ defmodule E2bEx.WebhookTest do
              enabled: true,
              url: "https://example.com/hook",
              events: ["sandbox.lifecycle.created"]
-           } = Webhook.from_api(api)
+           } = wh
 
-    refute Map.has_key?(Webhook.from_api(api), :signature_secret)
+    refute Map.has_key?(wh, :signature_secret)
   end
 end

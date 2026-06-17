@@ -18,7 +18,7 @@ defmodule E2bEx.Webhooks do
   https://e2b.dev/docs/sandbox/lifecycle-events-webhooks.
   """
 
-  alias E2bEx.{Request, Webhook}
+  alias E2bEx.{Error, Request, Webhook}
 
   @doc "List all webhooks (`GET /events/webhooks`)."
   @spec list(E2bEx.Client.t()) :: {:ok, [Webhook.t()]} | {:error, E2bEx.Error.t()}
@@ -35,7 +35,7 @@ defmodule E2bEx.Webhooks do
   @spec create(E2bEx.Client.t(), map()) :: {:ok, Webhook.t()} | {:error, E2bEx.Error.t()}
   def create(client, attrs) when is_map(attrs) do
     with {:ok, wh} <- Request.request(client, :post, "/events/webhooks", json: attrs) do
-      {:ok, Webhook.from_api(wh)}
+      decode_webhook(wh)
     end
   end
 
@@ -55,9 +55,19 @@ defmodule E2bEx.Webhooks do
           {:ok, Webhook.t()} | {:error, E2bEx.Error.t()}
   def update(client, webhook_id, attrs) when is_binary(webhook_id) and is_map(attrs) do
     with {:ok, wh} <- Request.request(client, :patch, "/events/webhooks/#{webhook_id}", json: attrs) do
-      {:ok, Webhook.from_api(wh)}
+      decode_webhook(wh)
     end
   end
+
+  defp decode_webhook(wh) when is_map(wh), do: {:ok, Webhook.from_api(wh)}
+
+  defp decode_webhook(_),
+    do:
+      {:error,
+       %Error{
+         message: "webhook endpoint returned an empty or unexpected body",
+         reason: :empty_response_body
+       }}
 
   @doc "Delete a webhook by id (`DELETE /events/webhooks/:id`)."
   @spec delete(E2bEx.Client.t(), String.t()) :: :ok | {:error, E2bEx.Error.t()}

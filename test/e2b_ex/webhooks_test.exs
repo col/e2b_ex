@@ -86,6 +86,26 @@ defmodule E2bEx.WebhooksTest do
     assert :ok = Webhooks.delete(client(), "wh_1")
   end
 
+  test "create/2 returns {:error, %Error{}} when response body is empty" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      assert conn.method == "POST" and conn.request_path == "/events/webhooks"
+      Plug.Conn.send_resp(conn, 201, "")
+    end)
+
+    assert {:error, %E2bEx.Error{reason: :empty_response_body}} =
+             Webhooks.create(client(), %{name: "x", url: "https://example.com"})
+  end
+
+  test "update/3 returns {:error, %Error{}} when response body is empty" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      assert conn.method == "PATCH" and conn.request_path == "/events/webhooks/wh_1"
+      Plug.Conn.send_resp(conn, 200, "")
+    end)
+
+    assert {:error, %E2bEx.Error{reason: :empty_response_body}} =
+             Webhooks.update(client(), "wh_1", %{enabled: false})
+  end
+
   test "surfaces a non-2xx response as {:error, %Error{}}" do
     Req.Test.stub(__MODULE__, fn conn ->
       conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{"code" => 404, "message" => "not found"})
