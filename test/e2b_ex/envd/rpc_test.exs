@@ -136,4 +136,74 @@ defmodule E2bEx.Envd.RpcTest do
       assert {:error, %E2bEx.Error{status: 503}} = Rpc.kill(ctx, 7)
     end
   end
+
+  describe "file content (via Bypass)" do
+    setup do
+      bypass = Bypass.open()
+      {:ok, ctx} = Rpc.context(client(), sandbox(), base_url: "http://localhost:#{bypass.port}")
+      {:ok, bypass: bypass, ctx: ctx}
+    end
+
+    test "get_file/3 GETs /files?path= with the access token and returns raw bytes",
+         %{bypass: bypass, ctx: ctx} do
+      Bypass.expect_once(bypass, "GET", "/files", fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+        assert conn.query_params["path"] == "/tmp/a.txt"
+        assert Plug.Conn.get_req_header(conn, "x-access-token") == ["tok_1"]
+        assert Plug.Conn.get_req_header(conn, "keepalive-ping-interval") == []
+        Plug.Conn.resp(conn, 200, "hello bytes")
+      end)
+
+      assert {:ok, "hello bytes"} = Rpc.get_file(ctx, "/tmp/a.txt")
+    end
+
+    test "get_file/3 adds username when :user is given and returns \"\" for an empty file",
+         %{bypass: bypass, ctx: ctx} do
+      Bypass.expect_once(bypass, "GET", "/files", fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+        assert conn.query_params["username"] == "root"
+        Plug.Conn.resp(conn, 200, "")
+      end)
+
+      assert {:ok, ""} = Rpc.get_file(ctx, "/tmp/a.txt", user: "root")
+    end
+
+    test "get_file/3 maps a non-2xx to {:error, %Error{}}", %{bypass: bypass, ctx: ctx} do
+      Bypass.expect_once(bypass, "GET", "/files", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(404, ~s({"code":"not_found","message":"no file"}))
+      end)
+
+      assert {:error, %Error{status: 404}} = Rpc.get_file(ctx, "/missing")
+    end
+
+    test "put_file/4 POSTs /files octet-stream with the raw body and returns the WriteInfo list",
+         %{bypass: bypass, ctx: ctx} do
+      Bypass.expect_once(bypass, "POST", "/files", fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+        assert conn.query_params["path"] == "/tmp/a.txt"
+        assert Plug.Conn.get_req_header(conn, "content-type") == ["application/octet-stream"]
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        assert raw == "payload"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s([{"name":"a.txt","type":"FILE_TYPE_FILE","path":"/tmp/a.txt"}]))
+      end)
+
+      assert {:ok, [%{"name" => "a.txt", "path" => "/tmp/a.txt"}]} =
+               Rpc.put_file(ctx, "/tmp/a.txt", "payload")
+    end
+
+    test "put_file/4 maps a non-2xx to {:error, %Error{}}", %{bypass: bypass, ctx: ctx} do
+      Bypass.expect_once(bypass, "POST", "/files", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(403, ~s({"code":"permission_denied","message":"nope"}))
+      end)
+
+      assert {:error, %Error{status: 403}} = Rpc.put_file(ctx, "/tmp/a.txt", "payload")
+    end
+  end
 end
